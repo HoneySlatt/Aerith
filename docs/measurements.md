@@ -108,7 +108,7 @@ Measured on 2026-11-11 on the high tier ([ROADMAP](ROADMAP.md#hardware)), with m
 sound discarded (`--vo=null --ao=null`), so mpv decodes in software and draws nothing; each mpv in
 bubblewrap ([CONTRIBUTING](../CONTRIBUTING.md#the-players-tests)). The figures show the player's
 behaviour and its cost beside mpv's, not a tier figure: those need the picture on the desktop
-([below](#against-m12)).
+([below](#against-m12-on-the-desktop)).
 
 ### The time to the first frame
 
@@ -132,20 +132,49 @@ alternated; two passes.
   No single option does it: mpv alone given each option by itself, eight runs each, showed its
   first frame in 80 to 130 ms after its first runs, as with its defaults, while the six options of
   the built-in scripts together, or all of the player's, brought it to 140 to 200 ms. That probe
-  is not in the repository; `time_to_the_first_frame` keeps the comparison of the whole sets. Why, and
-  whether it holds with a real video output, is not known yet
-  ([PLAN](PLAN.md#m13--mpv-driven-through-aerith-player)).
+  is not in the repository; `time_to_the_first_frame` keeps the comparison of the whole sets. Why
+  is not known. It does not hold on the desktop, with the picture shown
+  ([below](#against-m12-on-the-desktop)).
 - With its defaults, mpv alone gets faster run after run (243 to 80 ms), and with the player's
   options it does not. The first run of each series is the slowest.
 
-### Against M1.2
+### Against M1.2, on the desktop
 
-M1.2's figures for mpv alone, on the same clip: 617 ms from a file and 690 ms as a stream (medians,
-under a load test), 390 to 445 ms on other clips at rest. They are not comparable with the figures
-above: M1.2's mpv drew fullscreen through gpu-next with hardware decoding, and its first frame
-includes the video output's start and the compilation of its shaders, which a discarded picture
-skips. The comparison on the desktop, through `--window`, waits for the owner's go, and is taken
-again once M1.2 is complete ([PLAN](PLAN.md#m13--mpv-driven-through-aerith-player)).
+Measured on 2026-11-11 from 13:33 to 13:40 CET on the owner's desktop, through `owner-desktop`, the
+machine idle (load average about 1), the display as M1.2 recorded it (DP-3, 3840 × 2160 at
+240.016 Hz). The clip `hdr10-2160p-hevc10-eac3`, from a file unless said. Every mpv drew through
+gpu-next on `waylandvk` and decoded with `vaapi`, as each reported, with a fresh home and empty
+shader caches. The bench's runs play into its silent PipeWire; the player and the last probe
+discard the sound.
+
+| What | Runs, ms |
+|---|---|
+| mpv alone, the bench's way (M1.2's method): its defaults, fullscreen | 514.9, 453.3, 443.9 |
+| The same, as a stream | 442.5, 471.9, 447.8 |
+| The same, in a window (`fullscreen=no`) | 458.0, 479.3, 458.7 |
+| The same, its on-screen controller off (`osc=no`) | 411.3, 436.2, 427.3 |
+| The same, the six built-in scripts' options of the player off | 412.7, 412.0 |
+| The same, the player's input options | 440.0, 444.5 |
+| The same, `ytdl=no load-auto-profiles=no osc=no` | 429.5, 449.8 |
+| mpv alone, the bench's way, all the player's options, in a window | 202.6, 211.7, 215.4 |
+| The same, fullscreen | 215.2, 222.0, 210.4 |
+| mpv alone, its defaults, fullscreen, the clip loaded 2 s after mpv's IPC opened | 149.1, 139.0, 125.9 |
+| Through the player, `play --window`, the clip opened 1 s after the player started | 248.4, 243.6, 248.2, 247.4, 248.9 |
+
+- **The bench's figure for mpv alone includes part of mpv's start.** The bench loads the clip as
+  soon as mpv's IPC opens. Loaded once mpv has settled, mpv alone shows its first frame in 126 to
+  149 ms; loaded at once, in 444 to 515 ms with its built-in scripts, and in 203 to 222 ms with
+  all of them off. That fits mpv holding the first file until its scripts have started; no single
+  group of options does it. So M1.2's figures for mpv alone (617 and 690 ms under load, 390 to
+  445 ms at rest) measure a start, not a press of Play on a started mpv. Whether Kodi's carry a
+  start too is not known.
+- **Through the player, the first frame comes about 100 ms after a settled mpv alone's.** The
+  probable cause, not verified: in `Video::Window`, mpv opens its window and its video output at
+  the first load, while mpv alone (`force-window`) had them open before.
+- **The cost of the player's options seen with the picture discarded does not hold here**: on the
+  display, with mpv loading at once, those options make the first frame faster.
+- The run with mpv loaded 2 s after it started was driven from a shell over `socat`, outside the
+  repository, as the bench cannot wait yet; its command line was the bench's, with `--ao=null`.
 
 ### The corpus
 

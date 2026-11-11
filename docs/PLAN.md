@@ -22,8 +22,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   the rest of the rivals on the desktop, the lowest laptop, and the bar's figures. By the owner's
   choice (2026-11-11), M1.3 went ahead meanwhile. The owner says when the machine is free for
   M1.2's runs. M1.3 done on 2026-11-11
-  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)), but for its first frame on
-  the desktop, which waits for the owner's go with M1.2's runs. Next: M1.4, on the owner's go.
+  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)), its first frame measured on
+  the desktop. That measure found that the bench's first frame for mpv alone includes part of
+  mpv's start: M1.2's figures for it are to be taken again once the bench waits. Next: M1.4, on
+  the owner's go.
 
 ## Status
 
@@ -31,7 +33,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 |---|---|---|
 | [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Done |
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | In progress |
-| [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done; its desktop first frame waits on the owner |
+| [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done |
 | [M1.4](#m14--mpv-inside-aeriths-window-on-linux) | mpv's picture sits inside Aerith's window on Linux, under a test interface | Planned |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
@@ -98,25 +100,17 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   never a crash of Aerith.
 - **How to test.** `cargo test -p aerith-player`.
 - **Measured.** Press-to-first-frame against M1.2's figure; at rest, no wake-up of Aerith's own.
-- **Result.** Done on 2026-11-11. `Player` opens a file or an `http(s)` stream with its headers,
-  plays, pauses, seeks and stops it; each open is numbered, and the events of its source carry
-  the number: the first frame, a clock, mpv's report (decoder, colours, sound), a picture the
-  output could not show, and exactly one end. mpv reads its IPC on its standard input, with
-  nothing of the person's; headers are options of their own load, and no secret reaches a command
-  line, a title or a log ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-  Tests: 46 unit tests, 35 of them on the mpv engine, most against a fake mpv; 12 against the
-  real mpv, which CI runs (green, 3 min 25 s on Linux); the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
-  paused and stopped, asserted; 0 while playing, printed only. The player adds no measurable time
-  to the first frame beside mpv with the same options, which make it 36 to 69 ms later than mpv's
-  defaults, picture discarded; M1.2's figures drew the picture and are not comparable
-  ([figures](measurements.md#m13--mpv-driven-through-aerith-player)). The closing review found two
-  defects, fixed with tests: a replacing source of the same sound format lost its sound in the
-  report, and a stream's headers could reach the source opened just before it; its check found
-  four in the numbering of opens, fixed with tests too.
-- **Left, on the owner's go.** The first frame on the desktop, through `--window`, against mpv
-  alone with its defaults and with the player's options, about 5 minutes of the screen; again once
-  M1.2 is complete. If the options' cost holds with a real video output, find which of mpv's
-  scripts the first frame depends on, and why.
+- **Result.** Done on 2026-11-11 ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
+  `Player` opens a file or an `http(s)` stream with its headers, plays, pauses, seeks and stops
+  it; each open is numbered, its events carry the number and end exactly once. No secret reaches
+  a command line, a title or a log. Tests: 46 unit tests, most against a fake mpv; 12 against the
+  real mpv, in CI; the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
+  asserted. The closing review and its check found six defects, all fixed with tests
+  ([figures](measurements.md#m13--mpv-driven-through-aerith-player)).
+- **First frame on the desktop** ([figures](measurements.md#against-m12-on-the-desktop)): through
+  the player, 244 to 249 ms; mpv alone, once settled, 126 to 149 ms. The gap is probably the
+  player's window and video output opening at the first load: M1.4 keeps them ready before Play,
+  and measures it. To compare again once M1.2 is complete.
 
 ### M1.4 — mpv inside Aerith's window on Linux
 
@@ -164,6 +158,10 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 
 ## Known debt
 
+- The bench loads a clip as soon as the rival's engine answers: its first frame for mpv alone
+  includes part of mpv's start ([figures](measurements.md#against-m12-on-the-desktop)). The bench
+  is to wait until the engine has settled, and M1.2's first frames to be taken again; it changes
+  M1.2's method, on the owner's go.
 - The bench's sync figure is each engine's own estimate, without the sound card's latency; a
   capture of the corpus's beat would measure the real one ([ADR-0013](adr/0013-the-bench.md)).
 - Kodi's frame figure is a lower bound (its log's output drops only), and its sync is read only
