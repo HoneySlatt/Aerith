@@ -32,6 +32,8 @@ The interface sits above it and, on Android, Windows and Apple, cannot read its 
 | A morph between an element (a poster) and the video plane's region | Wished, Stage 3 | Planned: motion, first stage |
 | Content drawn into a surface of uwui's own above the plane, paced by that surface's frame callbacks, never the window's root, its input passing through to the window: needed only if M1.4b keeps the order where the video covers a black root, which lets the compositor scan the video out ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)) | Measured at M1.4b, Stage 3 | New (added at M1.4) |
 | The window's *suspended* state given to the plane's host, so that a hidden window stops the engine drawing | Wished, Stage 3 | New (added at M1.4) |
+| The window's own surface, its buffer and its scaling, in the interface's hands: winit 0.30 puts a viewport of its own on it, so the order where the video covers a black root reuses winit's viewport, and Umbriel offers no single-pixel buffer ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) | Measured at M1.4b, Stage 3 | New (added at M1.4) |
+| An event queue of the application's own woken by the interface's loop: winit 0.30 calls the application only for its own events, so the testbed re-checks its frame callbacks on a deadline | Wished, Stage 3 | New (added at M1.4) |
 
 ## The couch and the remote
 

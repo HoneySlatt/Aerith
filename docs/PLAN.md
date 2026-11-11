@@ -145,10 +145,10 @@ Aerith's window under a test interface, measured against the rivals. Planned by
       ([ADR-0018](adr/0018-what-building-the-relay-changed.md)), with its tests against a fake
       compositor and the real mpv
       ([figures](measurements.md#the-relay-against-a-fake-compositor)).
-  - Next:
-    - the testbed;
-    - the corpus's SDR clips through it on the owner's display;
-    - the first frame and the wake-ups while playing.
+    - the testbed ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)), run in
+      `agent-headless` in both orders, asleep while paused.
+  - Next, on the owner's display: the corpus's SDR clips through the testbed, the first frame, the
+    wake-ups while playing, mpv's memory while idle with its window ready.
 
 ### M1.4b — Inside the window, measured
 
@@ -236,6 +236,14 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - A hostile mpv can make Aerith hold about 410 file descriptors at a peak, and wayland-rs panics
   on two malformed messages that the relay refuses first: to raise upstream
   ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
+- `aerith-testbed` is removed once Stage 3's interface on uwui plays a film
+  ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)). It pins winit to `=0.30.13`, whose
+  viewport on the window's surface it relies on.
+- winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
+  libwayland-client at run time, the player's included: the development shell sets
+  `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
+- The relay's count of refresh gaps stayed 0 in headless sway: to check on Umbriel before M1.4b
+  reads cadence from it.
 - `scripts/test-check.sh` copies `.git` with tar: in a git worktree, where `.git` is a file, its
   cases stage scratch files in the worktree's own index.
 - `scripts/check.sh` grew from 33 s to about two minutes: `scripts/test-check.sh` runs the whole
