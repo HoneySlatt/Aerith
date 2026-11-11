@@ -1,6 +1,6 @@
 # 0014. The player's interface: commands and numbered events; mpv over its standard input
 
-- Status: Accepted
+- Status: Accepted; amended by 0016 (the clock)
 - Date: 2026-11-11
 
 ## Context

@@ -24,8 +24,11 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   M1.2's runs. M1.3 done on 2026-11-11
   ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)), its first frame measured on
   the desktop. That measure found that the bench's first frame for mpv alone includes part of
-  mpv's start: M1.2's figures for it are to be taken again once the bench waits. Next: M1.4, on
-  the owner's go.
+  mpv's start: M1.2's figures for it are to be taken again once the bench waits. M1.4 designed on
+  2026-11-11 ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md),
+  [ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md),
+  [ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) and split in two by the owner: M1.4a
+  under way.
 
 ## Status
 
@@ -34,7 +37,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Done |
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | In progress |
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done |
-| [M1.4](#m14--mpv-inside-aeriths-window-on-linux) | mpv's picture sits inside Aerith's window on Linux, under a test interface | Planned |
+| [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | In progress |
+| [M1.4b](#m14b--inside-the-window-measured) | The floors hold inside the window; the plane's order and display sync decided | Planned |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
 
@@ -109,20 +113,48 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   ([figures](measurements.md#m13--mpv-driven-through-aerith-player)).
 - **First frame on the desktop** ([figures](measurements.md#against-m12-on-the-desktop)): through
   the player, 244 to 249 ms; mpv alone, once settled, 126 to 149 ms. The gap is probably the
-  player's window and video output opening at the first load: M1.4 keeps them ready before Play,
+  player's window and video output opening at the first load: M1.4a keeps them ready before Play,
   and measures it. To compare again once M1.2 is complete.
 
-### M1.4 — mpv inside Aerith's window on Linux
+### M1.4a — The relay and the test interface
 
-- **Goal.** mpv's picture plays inside Aerith's window, under a test interface drawn with wgpu.
-- **Delivers.** Aerith's Wayland compositor for mpv: mpv's buffers placed in a subsurface under the
-  interface's surface, moved and resized with it; the test interface over it (controls, a
-  translucent panel).
+- **Goal.** mpv's picture plays inside Aerith's test window on Linux, through Aerith's relay, with
+  mpv's window and video output ready before Play.
+- **Delivers.**
+  - The relay in `aerith-player` ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)): mpv's
+    requests checked and issued again on the interface's connection, a plane the interface places,
+    sizes and hides, mpv started with its window ready.
+  - The clock with its rate, read again every 10 s while playing
+    ([ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md)).
+  - `aerith-testbed` ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)): controls and a
+    translucent panel over the video, in either order of the surfaces.
+  - The relay counts what the compositor presented of mpv's frames, for M1.4b's cadence.
+- **Done when.** The tests pass: the relay against a fake mpv, where a bad request ends mpv's
+  connection and never the window's; mpv through the relay in `agent-headless`; the fuzz target.
+  The corpus's SDR clips play inside the testbed on the owner's desktop. The first frame is
+  measured against mpv alone settled.
+- **How to test.** `cargo test`; the testbed in `agent-headless --sway`, with lavapipe; on the
+  owner's display, briefly, on the owner's go.
+- **Measured.** The first frame; at rest, 0 wake-ups of the player's and the relay's threads; the
+  interface thread's and the relay's wake-ups a second while a film plays; mpv's memory while idle
+  with its window ready; the check's and CI's time before and after.
+
+### M1.4b — Inside the window, measured
+
+- **Goal.** The cadence and sync floors hold inside the window; the order of the surfaces and
+  display sync are decided with figures.
+- **Delivers.**
+  - The bench measuring Aerith through the testbed.
+  - The two orders of the surfaces, the video above a black root with the interface above it, or
+    under a transparent root: GPU power against mpv alone, whether Umbriel scans the video out,
+    hitches over 60 toggles of the controls. The owner decides with these and a uwui session.
+  - Display sync, mpv's default audio sync against `display-resample`, at 240 and 60 Hz, on 23.976,
+    25 and 59.94 fps: presents a second, corrections, power. The owner decides the rule with these.
 - **Done when.** The corpus's SDR clips meet the cadence and sync floors at 60 Hz, 240 Hz and VRR
-  on the high tier, inside the window.
-- **How to test.** The bench, through `agent-headless` where it can, then on the owner's display.
+  on the high tier, inside the window; the two decisions are ADRs.
+- **How to test.** The bench, on the owner's display.
 - **Measured.** Cadence, sync, power and memory against mpv alone.
-- **By hand.** The owner watches the clips on the desktop.
+- **By hand.** The owner watches the clips, and switches the monitor to 60 Hz and to VRR.
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
@@ -178,8 +210,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   in reach: the separate process isolates crashes, not tokens. Due before Stage 2 stores a token:
   run mpv in a sandbox, as its tests do, with no bus, no home but its cache, and the network only
   for its stream ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-- The clock is not read again while playing: with mpv matching the display's rate, it would drift
-  by up to 1 % (decide at M1.4).
+- The clock is not read again while playing: with mpv matching the display's rate, it drifts by
+  up to 0.7 %. [ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md) decides the fix;
+  M1.4a builds it.
 - `reap` polls every 10 ms, up to 2 s, when mpv ends or is closed; a crash or a close only.
 - A source that is a playlist is stopped, but mpv may start fetching its first entry, without the
   source's headers, before the stop arrives

@@ -239,3 +239,38 @@ as a clock. mpv's are mpv's; the bench compares them with mpv alone.
 
 `scripts/test-check.sh` runs the whole test suite in six of its scratch copies, `at_rest`
 included: most of the growth is there.
+
+## M1.4a — The relay and the test interface
+
+### The clock under display sync
+
+Measured on 2026-11-11 on the owner's desktop through `owner-desktop`, for
+[ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md). Setup:
+- mpv 0.42.0 alone, through `--no-config --vo=gpu-next --gpu-context=waylandvk --hwdec=auto-safe
+  --ao=null --video-sync=display-resample`, fullscreen;
+- Umbriel, with RADV;
+- a fresh home, the corpus's cadence clips.
+
+A throwaway script drove mpv over a socket. It loaded the clip 2 s after mpv started, waited 10 s
+for display sync to settle, then read `time-pos` every second for 150 s and fitted a line through
+the readings. It observed `video-speed-correction` throughout.
+
+| Output | Clip | `video-speed-correction` | Its changes, after settling | Fitted rate of the position | Above the correction | Furthest reading from the line | Dropped / mistimed |
+|---|---|---|---|---|---|---|---|
+| DP-3, 240.016 Hz | cadence-23.976 | 1.001067 | 0 in 150 s | 1.001246 | +0.018 % | 33 ms | 0 / 5 |
+| DP-3, 240.016 Hz | cadence-25 | 0.99317 | 0 in 150 s | 0.993351 | +0.018 % | 22 ms | 0 / 1 |
+
+An earlier pass with two readings only, 120 s apart, ran on DP-2 at 179.999 Hz, where mpv opened
+by mistake. Its corrections were 1.000994 for the 23.976 and 59.94 fps clips and 0.993098 for
+25 fps, with no change after settling.
+
+- **At real time, the clock drifts** by +0.12 % (23.976 fps) to −0.67 % (25 fps): up to 24 s an
+  hour.
+- **At the correction's rate, the clock drifts by +0.018 %**, the same on both clips: about 11 ms
+  a minute.
+- The readings lie up to one frame from the line. mpv's position moves by whole frames.
+- mpv made 5 and 1 corrections of its timing (`mistimed-frame-count`) in the two runs.
+
+**In `agent-headless`.** The headless sway offers no `linux-dmabuf`, so mpv on RADV fails
+(`VK_ERROR_SURFACE_LOST_KHR`). lavapipe works only when named with `--vulkan-device`. It could
+not keep 60 Hz at 1080p, even with mpv's `fast` profile. Timing figures there are not tier figures.
