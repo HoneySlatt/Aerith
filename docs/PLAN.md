@@ -19,7 +19,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   in CI on Linux, and the Rust checks on Windows. M1.2 under way: the corpus
   ([ADR-0012](adr/0012-the-test-corpus.md)) and the bench ([ADR-0013](adr/0013-the-bench.md)) are
   built and run; mpv alone and part of Kodi are measured on the high tier. Waiting on the owner:
-  the rest of the rivals on the desktop, the lowest laptop, and the bar's figures.
+  the rest of the rivals on the desktop, the lowest laptop, and the bar's figures. By the owner's
+  choice (2026-11-11), M1.3 starts meanwhile: it compares its first frame with the figures M1.2
+  has, and again once M1.2 is done. The owner says when the machine is free for M1.2's runs.
 
 ## Status
 
