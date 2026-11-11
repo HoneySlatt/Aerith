@@ -87,8 +87,9 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - Store builds contain neither the torrent engine nor JavaScript plugins
   ([ADR-0007](docs/adr/0007-a-neutral-client-in-two-variants.md)).
 - Aerith installs no content source by default.
-- Every file starts with the MPL-2.0 header. Nothing under the GPL enters Aerith's own binaries;
-  mpv ships as a program apart.
+- Every file starts with the MPL-2.0 header, but the few that cannot carry it, which
+  `scripts/check.sh` names. Nothing under the GPL enters Aerith's own binaries; mpv ships as a
+  program apart.
 
 ## Code rules
 

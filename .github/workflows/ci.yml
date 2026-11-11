@@ -35,9 +35,10 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - run: nix develop --no-update-lock-file --command scripts/check.sh
 
-  # Windows is a platform of Stage 1: its lints and tests run there from the start, so that code that
-  # builds on Linux alone is seen at once. There is no Nix on Windows; rustup installs the toolchain
-  # that rust-toolchain.toml pins (ADR-0011).
+  # Windows is a platform of Stage 1: the checks that read Rust code run there from the start, so that
+  # code that builds on Linux alone, or documentation under `cfg(windows)`, is seen at once. The other
+  # checks do not depend on the system. There is no Nix on Windows; rustup installs the toolchain that
+  # rust-toolchain.toml pins (ADR-0011).
   windows:
     runs-on: windows-2025
     timeout-minutes: 20
@@ -52,3 +53,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo test --workspace --locked
+      - name: Documentation
+        run: cargo doc --workspace --no-deps --document-private-items --locked
+        env:
+          RUSTDOCFLAGS: -D warnings

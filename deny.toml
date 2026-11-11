@@ -13,17 +13,17 @@ targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [advisories]
 # Every RustSec advisory (a vulnerability, an unsound or unmaintained crate) affecting a dependency
-# fails the check. One may be ignored only by an entry here that says why.
+# fails the check. One may be ignored only by an entry here that says why. cargo-deny's defaults
+# would let an unsound crate through when it is not a direct dependency, and only warn of a yanked
+# one.
+unsound = "all"
+yanked = "deny"
 ignore = []
 
 [licenses]
 # The licences whose code may enter Aerith's own binaries, store builds included: the MPL-2.0 and
-# permissive licences, and the LGPL (ADR-0002). Nothing under the GPL. Licences are added here when a
-# dependency needs one, after checking that it fits.
-#
-# Cargo links Rust crates statically. A crate under the LGPL therefore obliges Aerith to let users
-# relink its binaries with their own version of that crate, which an App Store build cannot easily
-# offer: when one arrives, its dependency review says how that obligation is met on each platform.
+# permissive licences (ADR-0002). Nothing under the GPL. A licence is added here when a dependency
+# needs one, after checking that it fits.
 allow = [
     "0BSD",
     "Apache-2.0",
@@ -33,15 +33,17 @@ allow = [
     "BSL-1.0",
     "CC0-1.0",
     "ISC",
-    "LGPL-2.1-only",
-    "LGPL-2.1-or-later",
-    "LGPL-3.0-only",
-    "LGPL-3.0-or-later",
     "MIT",
     "MPL-2.0",
     "Unicode-3.0",
     "Zlib",
 ]
+# The LGPL is admitted too (ADR-0002), but crate by crate, whether a direct dependency or not. Cargo
+# links Rust crates statically, so a crate under the LGPL obliges Aerith to let users rebuild it with
+# their own version of that crate. Each LGPL crate gets an entry here only after a review that says
+# how each build of Aerith, store builds included, meets that licence:
+# { crate = "name", allow = ["LGPL-2.1-or-later"] }.
+exceptions = []
 confidence-threshold = 0.8
 # The list is a policy, not an inventory: a licence no dependency uses yet stays allowed.
 unused-allowed-license = "allow"

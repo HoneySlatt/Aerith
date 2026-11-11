@@ -10,9 +10,13 @@ Measured on 2026-11-11 on the high tier ([ROADMAP](ROADMAP.md#hardware)), Rust 1
 
 | What | Figure | How |
 |---|---|---|
-| `scripts/check.sh`, cold | 3.0 s | `time nix develop -c scripts/check.sh` after `rm -rf target`; the shell already built, the advisory database already fetched once |
-| `scripts/check.sh`, warm | 1.4 to 1.6 s | the same, three runs in a row |
-| CI, Linux job | see below | GitHub's own time for the `check` job, from a fresh runner: Nix installed, toolchain downloaded |
-| CI, Windows job | see below | GitHub's own time for the `windows` job, toolchain installed by rustup |
+| `scripts/check.sh`, cold | 8.7 s | `time nix develop -c scripts/check.sh` after `rm -rf target`; the shell already built, the advisory database already fetched once |
+| `scripts/check.sh`, warm | 7.9 to 8.8 s | the same, three runs in a row |
+| Its last step, `scripts/test-check.sh` | about 7 s of the above | 19 scratch copies, one per case |
+| The other steps, warm | 1.1 to 1.5 s | the same, with `AERITH_CHECK_INNER=1`, which skips the last step |
+| `cargo deny --locked check` alone | 0.8 to 1.0 s | mostly the advisory database's fetch |
+| CI, Linux job | not measured yet | GitHub's own time for the `check` job, from a fresh runner: Nix installed, toolchain downloaded |
+| CI, Windows job | not measured yet | GitHub's own time for the `windows` job, toolchain installed by rustup |
 
-Budget: each CI job under 20 minutes (a floor). Each job's timeout is set to it.
+Budget: each CI job under 20 minutes (a floor). Each job's timeout is set to it. The local check has
+no budget of its own yet.

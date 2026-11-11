@@ -29,8 +29,9 @@ needs a newer one, each bump in its own commit.
 
 ## Alternatives considered
 
-- **A nightly in the shell from the start**, as Magnolia has: ready for fuzzing and Miri, but about
-  1 GB downloaded by each new shell and each CI run for a tool nothing uses before Stage 2.
+- **A nightly in the shell from the start**, as Magnolia has: ready for fuzzing and Miri, but a
+  second toolchain, about 150 MB downloaded and 1 GB on disk, in each new shell and each CI run,
+  for a tool nothing uses before Stage 2.
 - **Rust from nixpkgs, unpinned**: one flake input fewer, but the compiler would change with each
   nixpkgs update, no nightly would be available, and rustup on Windows would have no version to read.
 - **fenix in place of rust-overlay**: the same toolchains, but a second way beside the family's.

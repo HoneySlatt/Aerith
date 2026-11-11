@@ -32,7 +32,8 @@ nix develop -c scripts/check.sh
 ```
 
 It runs every automated check: formatting, lints, tests, documentation, the dependencies' licences
-and advisories, the files' licence headers and the links between documents.
+and advisories, the files' licence headers and the links, then proves that each check fails when
+it should.
 [`CONTRIBUTING.md`](CONTRIBUTING.md) says what each one does and how to build Aerith.
 
 ## Licence

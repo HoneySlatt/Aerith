@@ -38,7 +38,10 @@
             (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
             # Enforces the dependency policy of deny.toml.
             pkgs.cargo-deny
-            # Checks the links between Markdown files.
+            # scripts/check.sh lists the repository's files with it; cargo deny fetches the
+            # advisories with it.
+            pkgs.git
+            # Checks the links of the documents and of the code's documentation.
             pkgs.lychee
           ];
         };
