@@ -59,7 +59,11 @@ impl Sandbox {
                 arguments.extend(["--tmpfs".to_owned(), folder.display().to_string()]);
             }
         }
-        arguments.extend(["--tmpfs", "/dev/snd", "--die-with-parent"].map(str::to_owned));
+        // A machine without a sound card has no /dev/snd: nothing to hide, nowhere to mount.
+        if Path::new("/dev/snd").exists() {
+            arguments.extend(["--tmpfs", "/dev/snd"].map(str::to_owned));
+        }
+        arguments.push("--die-with-parent".to_owned());
         if self.own_processes {
             arguments.extend(["--unshare-pid", "--proc", "/proc"].map(str::to_owned));
         }
@@ -100,7 +104,7 @@ mod tests {
         fs::write(root.join("corpus/clip"), "clip\n").unwrap();
         let home = std::env::var("HOME").unwrap();
         let script = format!(
-            "touch \"$HOME/.aerith-bench-sandbox-probe\" && ls -A /dev/snd | wc -l && \
+            "touch \"$HOME/.aerith-bench-sandbox-probe\" && ls -A /dev/snd 2>/dev/null | wc -l && \
              cat {corpus}/clip && touch {run}/written && ! touch {corpus}/denied 2>/dev/null && echo $$",
             corpus = root.join("corpus").display(),
             run = root.join("run").display(),

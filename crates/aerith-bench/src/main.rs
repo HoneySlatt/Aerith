@@ -21,6 +21,7 @@
 mod audio;
 #[cfg(target_os = "linux")]
 mod engine;
+#[cfg(target_os = "linux")]
 mod figures;
 #[cfg(target_os = "linux")]
 mod json_stream;
@@ -102,8 +103,13 @@ const RESERVED_MPV_OPTIONS: [&str; 9] = [
 
 #[cfg(not(target_os = "linux"))]
 fn run_command(_arguments: &[String]) -> ExitCode {
-    eprintln!("aerith-bench runs players on Linux only for now; Windows joins at milestone M1.6");
+    eprintln!("aerith-bench runs on Linux only for now; Windows joins at milestone M1.6");
     ExitCode::FAILURE
+}
+
+#[cfg(not(target_os = "linux"))]
+fn table_command(arguments: &[String]) -> ExitCode {
+    run_command(arguments)
 }
 
 /// Reads `run`'s arguments.
@@ -179,6 +185,7 @@ fn parse_run(arguments: &[String]) -> Result<run::RunOptions, String> {
 }
 
 /// Prints the Markdown table that compares the runs whose results are given.
+#[cfg(target_os = "linux")]
 fn table_command(paths: &[String]) -> ExitCode {
     if paths.is_empty() {
         eprintln!("{USAGE}");
