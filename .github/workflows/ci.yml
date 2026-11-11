@@ -1,0 +1,31 @@
+# Runs the automated checks of the definition of done (AGENTS.md) on each push to main and on each
+# pull request, in the same Nix shell that the agents use. Pin actions to commit SHAs, with the
+# release they correspond to in a comment, as SlimeEngine's CI does.
+name: CI
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Every week too, so that a dormant project still learns of new advisories and of upstream breakage.
+  # Each project takes a minute of its own, off the hour, when GitHub delays scheduled runs. GitHub
+  # stops scheduled runs after 60 days without activity in a public repository.
+  schedule:
+    - cron: "41 5 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - run: nix develop --no-update-lock-file --command scripts/check.sh
+  # A Windows job that builds and tests Aerith there comes with the workspace (M1.1, M1.6).
