@@ -109,10 +109,7 @@ pub fn stop(pids: &[u32], grace: Duration) {
     signal("TERM", pids);
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
-        if pids
-            .iter()
-            .all(|pid| !Path::new(&format!("/proc/{pid}")).exists() || is_zombie(*pid))
-        {
+        if !pids.iter().any(|pid| is_running(*pid)) {
             return;
         }
         thread::sleep(Duration::from_millis(100));
@@ -120,8 +117,10 @@ pub fn stop(pids: &[u32], grace: Duration) {
     signal("KILL", pids);
 }
 
-fn is_zombie(pid: u32) -> bool {
-    stat_fields(pid).is_some_and(|fields| fields.first().is_some_and(|state| state == "Z"))
+/// Whether `pid` still runs: its stat is readable and it is not a zombie, which has ended and
+/// waits only to be reaped. One read, so that a process reaped in between is not miscounted.
+fn is_running(pid: u32) -> bool {
+    stat_fields(pid).is_some_and(|fields| fields.first().is_some_and(|state| state != "Z"))
 }
 
 /// Sends a signal through kill(1): the standard library sends only SIGKILL, and the bench needs
@@ -170,11 +169,7 @@ mod tests {
         stop(&found, Duration::from_secs(5));
         parent.wait().unwrap();
         // A killed child may stay a zombie until its new parent reaps it: it no longer runs.
-        assert!(
-            found[1..]
-                .iter()
-                .all(|pid| !Path::new(&format!("/proc/{pid}")).exists() || is_zombie(*pid))
-        );
+        assert!(found[1..].iter().all(|pid| !is_running(*pid)));
     }
 
     #[test]

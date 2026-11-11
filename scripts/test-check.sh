@@ -36,7 +36,8 @@ expect() {
     elif [ "$expected" != pass ] && [ "$status" -ne 0 ] && [ "$last" = "==> $expected" ]; then
         echo "ok    $name: fails at '$expected'"
     else
-        echo "FAIL  $name: expected '$expected', got exit $status at '$last'" >&2
+        echo "FAIL  $name: expected '$expected', got exit $status at '$last'; its output ends:" >&2
+        tail -n 40 <<<"$output" | sed 's/^/      /' >&2
         failures=$((failures + 1))
     fi
 }
