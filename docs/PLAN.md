@@ -9,7 +9,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 ## Current
 
-- **Design**: done on 2026-11-11, ADRs 0001 to 0009. The facts behind it, with their sources, are
+- **Design**: done on 2026-11-11, ADRs 0001 to 0010. The facts behind it, with their sources, are
   in [`survey.md`](survey.md); what Aerith asks of uwui is in [`uwui-needs.md`](uwui-needs.md). A
   session in uwui's repository is deciding uwui's platform targets (macOS, iOS, tvOS, Android TV),
   HDR and the video element; its answers are recorded in `uwui-needs.md` when they come.
@@ -108,6 +108,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - Contribute to mpv the Vulkan render API its maintainers described, so that the video becomes a
   texture of the interface ([ADR-0003](adr/0003-mpv-in-its-own-process.md)).
 - The player screen as uwui's screen of reference for glass over moving content.
+- The logo drawn again as a true vector, the same flower, without the raster's stray specks: crisp
+  at every size and a fraction of its 765 KB ([ADR-0010](adr/0010-the-logo.md)).
 
 ## Known debt
 

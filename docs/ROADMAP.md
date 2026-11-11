@@ -112,6 +112,7 @@ The starting points; M1.2 measures the rivals and sets each figure.
 | Content and stores | No source by default; store and full variants ([ADR-0007](adr/0007-a-neutral-client-in-two-variants.md)) |
 | Quality bar | Floors and leads, figures measured first ([ADR-0008](adr/0008-the-quality-bar.md)) |
 | Stages | Their order ([ADR-0009](adr/0009-the-order-of-the-stages.md)) |
+| Logo | Aerith's mark, outside the MPL ([ADR-0010](adr/0010-the-logo.md)) |
 
 ### Open
 
@@ -125,7 +126,6 @@ Each is decided by an ADR at the stage where it becomes necessary, not earlier.
 | The Stremio protocol | Aerith's own types from the specification, stremio-core's as a test oracle | Stage 2 |
 | Nuvio sync | Its Supabase API, tested against a pinned self-hosted backend | Stage 2 |
 | The look | Directions shown as captures and recordings off screen | Stage 3 |
-| The logo | Concepts exist outside the repository; its rights, as the owner's other logos | Before the first release |
 | Packages | Flatpak, AppImage, Nix, an MSI | Before the first release |
 | Metadata for the library | TMDB (its terms: attribution, cache of at most 6 months), TheTVDB | Stage 5 |
 | The Apple engine | Aerith's own, or AetherEngine | Stage 7 |

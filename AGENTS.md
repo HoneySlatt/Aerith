@@ -10,7 +10,7 @@ macOS, iPhone, Apple TV, Android phones and Android TV, at a desk and on a couch
 be written on uwui, the owner's UI framework, which is not ready yet. It is licensed under MPL-2.0
 ([ADR-0002](docs/adr/0002-mpl-2-0.md)).
 
-Its real state: the design is done (ADRs 0001 to 0009); no code exists. Stage 1, the player on the
+Its real state: the design is done (ADRs 0001 to 0010); no code exists. Stage 1, the player on the
 desktop, is next.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo/aerith.svg" alt="Aerith's logo: a five-petal flower made of a single folded ribbon, from violet to cyan" width="256">
+</p>
+
 # Aerith
 
 Aerith is an open-source video client for films and series. It will read Stremio addons, your own
@@ -31,4 +35,5 @@ It checks the links between the Markdown files, anchors included, with lychee.
 
 ## Licence
 
-Aerith is under the Mozilla Public License 2.0: [`LICENSE`](LICENSE).
+Aerith is under the Mozilla Public License 2.0: [`LICENSE`](LICENSE). Its logo is not under it:
+[`logo/README.md`](logo/README.md) says how it may be shown.
