@@ -247,6 +247,12 @@ fn shm_file(fd: impl AsFd, size: i32, invalid_fd: u32) -> Result<(), Refusal> {
     if !seals.contains(SealFlags::SEAL) {
         return refuse("cannot be sealed");
     }
+    // A file that can still shrink, as a memfd made without `MFD_ALLOW_SEALING`, would let mpv cut
+    // the pool under the compositor: wlroots reads zeroes past its end, but compositors built on
+    // libwayland's `wl_shm` raise a protocol error, on the window's connection.
+    if !seals.contains(SealFlags::SHRINK) {
+        return refuse("may still shrink");
+    }
     if seals.intersects(SealFlags::WRITE | SealFlags::FUTURE_WRITE) {
         return refuse("is sealed against writing");
     }
@@ -271,12 +277,8 @@ fn shm_file_system_is_memory(magic: i128) -> bool {
 /// Seals a memory file against shrinking and against any new seal. Returns whether its seals can
 /// no longer change: they could be added, or the file was sealed against new seals already, as a
 /// memfd made without `MFD_ALLOW_SEALING` or a tmpfs file opened by its path are from the start.
-///
-/// Shrinking is sealed too where the file still takes seals, so that a compositor that maps the
-/// pool never reads past its end: wlroots reads zeroes there, but compositors built on libwayland's
-/// `wl_shm` raise a protocol error. Mesa and mpv never shrink a pool's file. A file sealed against
-/// new seals without being sealed against shrinking may still shrink: harmless on wlroots, not
-/// on those compositors.
+/// The caller then refuses a file that is not sealed against shrinking: Mesa and mpv make their
+/// pools with memfds that take seals.
 fn freeze_seals(fd: BorrowedFd<'_>) -> bool {
     match rustix::fs::fcntl_add_seals(fd, SealFlags::SHRINK | SealFlags::SEAL) {
         Ok(()) => true,
@@ -692,11 +694,12 @@ mod tests {
     }
 
     #[test]
-    fn a_pool_sealed_against_new_seals_already_passes() {
-        // As memfd_create makes it without MFD_ALLOW_SEALING.
+    fn a_pool_sealed_against_new_seals_passes_only_if_it_cannot_shrink() {
+        // As memfd_create makes it without MFD_ALLOW_SEALING: sealed against new seals, but free
+        // to shrink, which libwayland's wl_shm answers with a protocol error.
         let unsealable = rustix::fs::memfd_create("relay-test", MemfdFlags::CLOEXEC).unwrap();
         rustix::fs::ftruncate(&unsealable, 4096).unwrap();
-        assert!(shm_pool(&unsealable, 4096, 7, 8).is_ok());
+        assert!(shm_pool(&unsealable, 4096, 7, 8).is_err());
         // As mpv makes its cursor's pool: sealed against shrinking and new seals.
         let frozen = memfd(4096);
         rustix::fs::fcntl_add_seals(&frozen, SealFlags::SHRINK | SealFlags::SEAL).unwrap();
