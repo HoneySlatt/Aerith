@@ -7,7 +7,8 @@
 //! mpv is the one `AERITH_TEST_MPV` names, which the development shell sets (`flake.nix`). Each
 //! test runs it through bubblewrap, as the bench runs its rivals (ADR-0013): the person's home is
 //! replaced by the test's; the sound devices and the session's runtime folders (its sound server,
-//! its compositor, its bus) are hidden, and the variables that name them removed. Each test then checks that mpv wrote nothing in that home.
+//! its compositor, its bus) are hidden, the variables that name them removed, and the runtime
+//! folder is one of the test's own. Each test then checks that mpv wrote nothing in that home.
 
 #![allow(
     dead_code,
@@ -18,6 +19,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -45,8 +47,9 @@ impl TestDir {
             COUNT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
-        for folder in ["home", "cache", "clips"] {
+        for folder in ["home", "cache", "clips", "runtime"] {
             fs::create_dir_all(root.join(folder)).unwrap();
+            fs::set_permissions(root.join(folder), fs::Permissions::from_mode(0o700)).unwrap();
         }
         Self { root }
     }
@@ -84,6 +87,14 @@ impl TestDir {
                 arguments.extend(["--tmpfs".to_owned(), folder.display().to_string()]);
             }
         }
+        // A runtime folder of the test's own: without one, libraries fall back on the home (the
+        // sound client's writes `~/.config/pulse`).
+        let runtime = self.root.join("runtime");
+        arguments.extend([
+            "--setenv".to_owned(),
+            "XDG_RUNTIME_DIR".to_owned(),
+            runtime.display().to_string(),
+        ]);
         for variable in [
             "WAYLAND_DISPLAY",
             "DISPLAY",
@@ -132,10 +143,11 @@ impl TestDir {
         // FFmpeg's filters as sources. Written apart from their arguments: the link check reads
         // the whole string as a URL whose port is malformed.
         let lavfi = "av://lavfi";
-        let status = Command::new(self.mpv(&[]))
+        let output = Command::new(self.mpv(&[]))
             .args([
                 "--no-config",
-                "--terminal=no",
+                // Only its errors, which the failure below shows.
+                "--msg-level=all=error",
                 &format!("{lavfi}:testsrc2=size=320x240:rate=24:duration={seconds}"),
                 &format!("--audio-file={lavfi}:sine=frequency=440:duration={seconds}"),
                 &format!("--o={}", clip.display()),
@@ -143,9 +155,15 @@ impl TestDir {
                 "--ovc=ffv1",
                 "--oac=flac",
             ])
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success(), "mpv made the clip");
+        assert!(
+            output.status.success(),
+            "mpv could not make the clip ({}): {}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         clip
     }
 
