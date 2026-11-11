@@ -9,7 +9,7 @@
 //! ```text
 //! aerith-testbed <file or URL> [--order below|above] [--fullscreen] [--letterbox]
 //!                [--seconds N] [--pause-after N] [--toggle-controls N] [--stats]
-//!                [--mpv PROGRAM] [--sound]
+//!                [--mpv PROGRAM] [--cache FOLDER] [--sound]
 //! ```
 //!
 //! `CONTRIBUTING.md` says how to run it, in `agent-headless` and on a desktop.

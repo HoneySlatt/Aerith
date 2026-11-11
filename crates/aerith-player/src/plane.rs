@@ -82,6 +82,11 @@ unsafe impl Sync for Window {}
 /// plane moves, resizes, shows and hides in the same frame as the interface's own content. None
 /// waits on the engine: the plane scales the engine's last frame to its new size until the engine
 /// draws at that size. Calls may come from any thread.
+///
+/// The interface must make that commit. A change to a plane that shows holds the engine's frames
+/// back until it does: the plane's surface runs in step with its parent until the compositor has
+/// drawn the change, so an interface that places or shows the plane and then never commits shows
+/// a frozen picture.
 pub struct Plane {
     relay: Relay,
 }
@@ -169,8 +174,8 @@ pub struct Presentation {
     /// the compositor drawing them (`zero_copy`).
     pub zero_copy: u64,
     /// `gaps[n]` counts the frames presented `n` refreshes after the frame presented before them:
-    /// a film at 23.976 frames a second on a 240 Hz display alternates gaps of 10 and 11;
-    /// a longer gap is a frame shown too long. Gaps of [`COUNTED_GAPS`] refreshes and more are in
+    /// a film at 23.976 frames a second on a 240.016 Hz display shows each frame for 10
+    /// refreshes, and one for 11 about every 3.9 s; a longer gap is a frame shown too long. Gaps of [`COUNTED_GAPS`] refreshes and more are in
     /// `longer_gaps`. A refresh counter that goes back (an output changed) starts the gaps again.
     pub gaps: [u64; COUNTED_GAPS],
     /// Gaps of [`COUNTED_GAPS`] refreshes or more.
