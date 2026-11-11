@@ -47,7 +47,8 @@
 //!   a wrapper can add options; `--sound` plays the sound aloud, which is discarded otherwise.
 //!
 //! mpv's shader cache, and the GPU driver's of both processes, go to a folder of the system's
-//! temporary folder, removed at the end.
+//! temporary folder, removed at the end, so that each run starts with empty caches; `--cache
+//! FOLDER` keeps them in a folder that outlives the run, as Aerith's own cache does.
 //!
 //! # The statistics
 //!
@@ -107,7 +108,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let cache = std::env::temp_dir().join(format!("aerith-testbed-{}", std::process::id()));
+    let kept = options.cache.clone();
+    let cache = kept.clone().unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("aerith-testbed-{}", std::process::id()))
+    });
     // The GPU driver's shader cache of this process goes with mpv's, not to the person's home.
     // SAFETY: no other thread exists yet, so nothing reads the environment while it changes.
     unsafe {
@@ -115,7 +119,9 @@ fn main() -> ExitCode {
         std::env::set_var("__GL_SHADER_DISK_CACHE_PATH", cache.join("driver"));
     }
     let outcome = app::run(options, &cache);
-    let _ = std::fs::remove_dir_all(&cache);
+    if kept.is_none() {
+        let _ = std::fs::remove_dir_all(&cache);
+    }
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

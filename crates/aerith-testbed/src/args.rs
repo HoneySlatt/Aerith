@@ -10,7 +10,7 @@ use std::time::Duration;
 pub const USAGE: &str = "usage: aerith-testbed <file or URL> [--order below|above] [--fullscreen] \
 [--letterbox]
                       [--seconds N] [--pause-after N] [--toggle-controls N] [--stats]
-                      [--mpv PROGRAM] [--sound]";
+                      [--mpv PROGRAM] [--cache FOLDER] [--sound]";
 
 /// Where the video plane lies among the window's surfaces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +40,9 @@ pub struct Options {
     pub stats: bool,
     /// mpv's program.
     pub mpv: PathBuf,
+    /// A folder for the shader caches that outlives the run, as Aerith's own cache does; by default
+    /// a fresh folder, removed at the end, so that each run starts with empty caches.
+    pub cache: Option<PathBuf>,
     /// Play the sound aloud.
     pub sound: bool,
 }
@@ -76,6 +79,7 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Parsed, Argu
         toggle_controls: 0,
         stats: false,
         mpv: PathBuf::from("mpv"),
+        cache: None,
         sound: false,
     };
     while let Some(argument) = arguments.next() {
@@ -112,6 +116,7 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Parsed, Argu
             }
             "--stats" => options.stats = true,
             "--mpv" => options.mpv = PathBuf::from(value("--mpv")?),
+            "--cache" => options.cache = Some(PathBuf::from(value("--cache")?)),
             "--sound" => options.sound = true,
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return error(format!("unknown option {flag:?}"));
@@ -172,6 +177,7 @@ mod tests {
                 toggle_controls: 0,
                 stats: false,
                 mpv: PathBuf::from("mpv"),
+                cache: None,
                 sound: false,
             }
         );
@@ -194,6 +200,8 @@ mod tests {
             "--letterbox",
             "--mpv",
             "/tmp/mpv-lavapipe",
+            "--cache",
+            "/tmp/testbed-cache",
             "--sound",
         ]);
         assert_eq!(options.source, "https://example.org/clip.mkv");
@@ -202,6 +210,7 @@ mod tests {
         assert_eq!(options.pause_after, Some(Duration::from_millis(2500)));
         assert_eq!(options.toggle_controls, 60);
         assert_eq!(options.mpv, PathBuf::from("/tmp/mpv-lavapipe"));
+        assert_eq!(options.cache, Some(PathBuf::from("/tmp/testbed-cache")));
         assert!(options.stats && options.fullscreen && options.letterbox && options.sound);
     }
 

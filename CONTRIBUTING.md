@@ -125,7 +125,7 @@ player's plane, under test controls and a translucent panel. Its crate documenta
 
 ```sh
 aerith-testbed <file or URL> [--order below|above] [--fullscreen] [--letterbox] [--seconds N]
-    [--pause-after N] [--toggle-controls N] [--stats] [--mpv PROGRAM] [--sound]
+    [--pause-after N] [--toggle-controls N] [--stats] [--mpv PROGRAM] [--cache FOLDER] [--sound]
 ```
 
 - `--order below`, the default, puts the video under the window's own surface, transparent;
@@ -137,7 +137,8 @@ aerith-testbed <file or URL> [--order below|above] [--fullscreen] [--letterbox] 
 - Keys: space plays or pauses, the arrows seek 10 s, `f` toggles fullscreen, `h` the controls,
   `q` or Escape quits. The controls show on a key or a move of the pointer, for 3 s.
 - The sound is discarded unless `--sound` is given. mpv's caches and the GPU driver's go to a
-  folder under the system's temporary folder, removed at the end.
+  folder under the system's temporary folder, removed at the end; `--cache FOLDER` keeps them
+  from one run to the next, as Aerith's own cache does.
 
 **In `agent-headless`.** The services that run agents have no display: `agent-headless --sway`
 gives the testbed a headless sway of its own. That sway offers no `linux-dmabuf`, so both mpv and
