@@ -38,7 +38,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command as Process, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -167,8 +167,9 @@ enum Message {
 /// The running engine, as the player holds it.
 pub(crate) struct Engine {
     inbox: Sender<Message>,
-    /// The number of the last open.
-    opens: AtomicU64,
+    /// The number of the last open. Locked while an open is numbered and sent, so that opens made
+    /// from several threads reach the engine thread in the order of their numbers.
+    opens: Mutex<u64>,
     /// Our end of the connection, to close it on drop even if the engine thread is stuck writing.
     connection: UnixStream,
     /// The engine thread, which returns how mpv ended.
@@ -233,7 +234,7 @@ impl Engine {
         Ok((
             Self {
                 inbox,
-                opens: AtomicU64::new(0),
+                opens: Mutex::new(0),
                 connection,
                 thread: Some(thread),
             },
@@ -243,7 +244,13 @@ impl Engine {
 
     /// Sends the open of `source`, numbered after the last one.
     pub(crate) fn open(&self, source: Source) -> Result<OpenId, EngineGone> {
-        let open = OpenId(self.opens.fetch_add(1, Ordering::Relaxed) + 1);
+        // A thread that panicked holding the lock left a number that is still right.
+        let mut last = self
+            .opens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *last += 1;
+        let open = OpenId(*last);
         self.send(Command::Open(open, source)).map(|()| open)
     }
 
@@ -256,6 +263,7 @@ impl Engine {
 
 impl Engine {
     /// Asks mpv to quit, waits for it as [`reap`] does, and says how it ended; `None` once closed.
+    /// Dropping the player calls it; its answer lets a test see that mpv quit by itself.
     fn close(&mut self) -> Option<String> {
         // Close first, then the connection: the engine thread reads the close before the end of
         // the connection, and does not report mpv's exit as a failure.
@@ -461,7 +469,16 @@ impl Session {
                 pending("seek"),
                 json!(["seek", position.as_secs_f64(), "absolute+exact"]),
             ),
-            Command::Stop => self.request(pending("stop"), json!(["stop"])),
+            Command::Stop => {
+                // mpv clears its playlist: an open that has not started loading ends here, as mpv
+                // will say nothing of it.
+                let waiting: Vec<OpenId> = std::mem::take(&mut self.waiting).into_iter().collect();
+                self.entries.retain(|_, open| !waiting.contains(open));
+                for open in waiting {
+                    self.emit(Event::Ended(open, Ending::Stopped));
+                }
+                self.request(pending("stop"), json!(["stop"]));
+            }
         }
     }
 
@@ -477,8 +494,8 @@ impl Session {
         }
     }
 
-    /// Asks for the current source's position, for a [`Clock`], unless a question is already on
-    /// its way: its answer comes after the change that prompted this one, and is read with the
+    /// Asks for the current source's position, for a [`Clock`], unless a question for it is already
+    /// on its way: its answer comes after the change that prompted this one, and is read with the
     /// state then.
     fn ask_position(&mut self) {
         let Some(open) = self.current.filter(|_| self.started) else {
@@ -487,7 +504,7 @@ impl Session {
         if !self
             .pending
             .values()
-            .any(|p| matches!(p, Pending::Position(_)))
+            .any(|p| matches!(p, Pending::Position(of) if *of == open))
         {
             self.request(Pending::Position(open), json!(["get_property", "time-pos"]));
         }
@@ -498,10 +515,12 @@ impl Session {
     /// the report of a source is never built from what was observed for the last one.
     fn read_report(&mut self) {
         let Some(open) = self.current else { return };
+        // A reading on its way for this source answers for both; one for an earlier source is
+        // dropped when it comes, and does not count.
         if self
             .pending
             .values()
-            .any(|p| matches!(p, Pending::Property { .. }))
+            .any(|p| matches!(p, Pending::Property { open: of, .. } if *of == open))
         {
             return;
         }
@@ -541,16 +560,20 @@ impl Session {
                 command,
                 reason: error(),
             }),
-            Some(Pending::Load(open)) => {
-                let entry = answer["data"]["playlist_entry_id"].as_u64();
-                match entry.filter(|_| success) {
-                    Some(entry) => {
+            // An open already ended (stopped, or replaced) needs no number.
+            Some(Pending::Load(open)) if self.waiting.contains(&open) => {
+                match (success, answer["data"]["playlist_entry_id"].as_u64()) {
+                    (true, Some(entry)) => {
                         self.entries.insert(entry, open);
                     }
-                    None => {
-                        if self.waiting.remove(&open) {
-                            self.emit(Event::Ended(open, Ending::Failed(error())));
-                        }
+                    (true, None) => {
+                        self.waiting.remove(&open);
+                        let reason = "mpv gave the load no number".to_owned();
+                        self.emit(Event::Ended(open, Ending::Failed(reason)));
+                    }
+                    (false, _) => {
+                        self.waiting.remove(&open);
+                        self.emit(Event::Ended(open, Ending::Failed(error())));
                     }
                 }
             }
@@ -605,7 +628,9 @@ impl Session {
             "start-file" => {
                 // An entry that is not one of Aerith's opens (a playlist's) plays as no source:
                 // its events are not sent.
-                self.current = entry.and_then(|entry| self.entries.get(&entry).copied());
+                self.current = entry
+                    .and_then(|entry| self.entries.get(&entry).copied())
+                    .filter(|open| self.waiting.contains(open));
                 if let Some(open) = self.current {
                     self.waiting.remove(&open);
                     self.end_superseded(open);
@@ -651,8 +676,11 @@ impl Session {
                     ),
                     Some("redirect") => {
                         // A playlist, which mpv would replace by its entries, without the
-                        // source's headers: the player plays one media an open.
-                        self.request(Pending::Ignored, json!(["stop"]));
+                        // source's headers: the player plays one media an open. Stopped unless a
+                        // later open has been sent since, which a stop would end.
+                        if !self.waiting.iter().any(|later| *later > open) {
+                            self.request(Pending::Ignored, json!(["stop"]));
+                        }
                         Ending::Failed("the source is a playlist".to_owned())
                     }
                     other => Ending::Failed(format!("ended for an unknown reason: {other:?}")),
@@ -1200,6 +1228,124 @@ mod tests {
         };
         assert_eq!(open, second);
         assert_eq!(report.audio.unwrap().codec, "truehd");
+    }
+
+    #[test]
+    fn a_stop_ends_the_opens_that_have_not_started() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = engine.open(file("/a.mkv")).unwrap();
+        mpv.load(1);
+        engine.send(Command::Stop).unwrap();
+        assert_eq!(next(&events), Event::Ended(open, Ending::Stopped));
+        assert_eq!(mpv.accept()["command"], json!(["stop"]));
+        // mpv cleared its playlist; were it to start the entry all the same, nothing is sent.
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
+        mpv.send(json!({"event": "playback-restart"}));
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        quiet(&events);
+    }
+
+    #[test]
+    fn an_open_stopped_before_mpv_answers_its_load_ends_once() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = engine.open(file("/a.mkv")).unwrap();
+        let load = mpv.command();
+        engine.send(Command::Stop).unwrap();
+        assert_eq!(next(&events), Event::Ended(open, Ending::Stopped));
+        mpv.answer(&load, "success", json!({"playlist_entry_id": 1}));
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
+        mpv.send(json!({"event": "playback-restart"}));
+        quiet(&events);
+    }
+
+    #[test]
+    fn readings_on_their_way_for_the_last_source_do_not_hold_back_the_next() {
+        let (engine, events, mut mpv) = driven(exited());
+        let first = engine.open(file("/a.mkv")).unwrap();
+        mpv.load(1);
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
+        mpv.send(json!({"event": "playback-restart"}));
+        assert_eq!(next(&events), Event::Started(first));
+        // The first source's report and position are asked and left unanswered.
+        for _ in 0..=REPORTED.len() + 1 {
+            mpv.command();
+        }
+        let second = engine.open(file("/b.mkv")).unwrap();
+        mpv.load(2);
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        mpv.send(json!({"event": "playback-restart"}));
+        assert_eq!(next(&events), Event::Ended(first, Ending::Stopped));
+        assert_eq!(next(&events), Event::Started(second));
+        mpv.report_read(&hdr_report());
+        assert!(matches!(next(&events), Event::Report(o, _) if o == second));
+        mpv.position(0.0);
+        assert!(matches!(next(&events), Event::Clock(o, _) if o == second));
+    }
+
+    #[test]
+    fn a_playlists_stop_spares_an_open_sent_after_it() {
+        let (engine, events, mut mpv) = driven(exited());
+        let list = engine.open(file("/list.m3u")).unwrap();
+        mpv.load(1);
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
+        let next_open = engine.open(file("/b.mkv")).unwrap();
+        mpv.load(2);
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "redirect"}));
+        assert!(matches!(next(&events), Event::Ended(o, Ending::Failed(_)) if o == list));
+        // The next command mpv reads is the person's, not a stop that would end the later open.
+        engine.send(Command::Play).unwrap();
+        assert_eq!(
+            mpv.accept()["command"],
+            json!(["set_property", "pause", false])
+        );
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        mpv.send(json!({"event": "playback-restart"}));
+        assert_eq!(next(&events), Event::Started(next_open));
+    }
+
+    #[test]
+    fn opens_from_several_threads_reach_mpv_in_the_order_of_their_numbers() {
+        const EACH: u64 = 500;
+        let (engine, events, mut mpv) = driven(exited());
+        let engine = std::sync::Arc::new(engine);
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let engine = std::sync::Arc::clone(&engine);
+                thread::spawn(move || {
+                    for _ in 0..EACH {
+                        engine.open(file("/a.mkv")).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for entry in 1..=2 * EACH {
+            mpv.load(entry);
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        // The entries start in the order mpv received their loads. Were two opens received out of
+        // the order of their numbers, the start of the later-numbered one would end the other.
+        for entry in 1..=2 * EACH {
+            mpv.send(json!({"event": "start-file", "playlist_entry_id": entry}));
+        }
+        quiet(&events);
+    }
+
+    #[test]
+    fn a_load_mpv_does_not_number_ends_its_open() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = engine.open(file("/a.mkv")).unwrap();
+        let load = mpv.command();
+        mpv.answer(&load, "success", Value::Null);
+        assert_eq!(
+            next(&events),
+            Event::Ended(
+                open,
+                Ending::Failed("mpv gave the load no number".to_owned())
+            )
+        );
     }
 
     #[test]

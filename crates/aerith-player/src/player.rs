@@ -84,8 +84,9 @@ impl Player {
         Ok((Self { engine }, events))
     }
 
-    /// Opens `source` and plays it, unless the player is paused; it replaces what was playing,
-    /// which ends as [`crate::Ending::Stopped`]. Returns the number the events of this source
+    /// Opens `source` and plays it, unless the player is paused; once it loads, it replaces what
+    /// was playing, which ends as [`crate::Ending::Stopped`]. An open that fails before it loads
+    /// leaves what was playing as it was. Returns the number the events of this source
     /// carry. Unless the engine fails first, they end with exactly one [`Event::Ended`], and hold
     /// one [`Event::Started`] before it if the first frame was shown: an open replaced before it
     /// loads only ends. A source that is a playlist ends as failed: the player plays one media an

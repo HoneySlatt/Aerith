@@ -104,14 +104,15 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   output could not show, and exactly one end. mpv reads its IPC on its standard input, with
   nothing of the person's; headers are options of their own load, and no secret reaches a command
   line, a title or a log ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-  Tests: 39 unit tests, 29 of them on the mpv engine, most against a fake mpv; 11 against the
-  real mpv, in CI; the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
+  Tests: 46 unit tests, 35 of them on the mpv engine, most against a fake mpv; 12 against the
+  real mpv, for CI; the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
   paused and stopped, asserted; 0 while playing, printed only. The player adds no measurable time
   to the first frame beside mpv with the same options, which make it 36 to 69 ms later than mpv's
   defaults, picture discarded; M1.2's figures drew the picture and are not comparable
   ([figures](measurements.md#m13--mpv-driven-through-aerith-player)). The closing review found two
   defects, fixed with tests: a replacing source of the same sound format lost its sound in the
-  report, and a stream's headers could reach the source opened just before it.
+  report, and a stream's headers could reach the source opened just before it; its check found
+  four in the numbering of opens, fixed with tests too.
 - **Left, on the owner's go.** The first frame on the desktop, through `--window`, against mpv
   alone with its defaults and with the player's options, about 5 minutes of the screen; again once
   M1.2 is complete. If the options' cost holds with a real video output, find which of mpv's
@@ -182,6 +183,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - The clock is not read again while playing: with mpv matching the display's rate, it would drift
   by up to 1 % (decide at M1.4).
 - `reap` polls every 10 ms, up to 2 s, when mpv ends or is closed; a crash or a close only.
+- A source that is a playlist is stopped, but mpv may start fetching its first entry, without the
+  source's headers, before the stop arrives
+  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
 - The player's report uses mpv's names for codecs, formats and colours, and says nothing of Dolby
   Vision yet (M1.5).
 - `--window` was run only where it fails (`agent-headless`, without a GPU): its picture on a real

@@ -129,9 +129,10 @@ alternated; two passes.
   and −1 ms between medians, within the runs' spread.
 - **mpv's options cost more.** With the built-in scripts and bindings turned off as the player
   does, mpv shows its first frame 36 to 69 ms later than with its defaults, in these conditions.
-  No single option does it: in a probe run once, by hand and not kept, each option alone left the
-  time as with the defaults (80 to 130 ms after the first runs), while the six options of the
-  built-in scripts together, or all of the player's, brought it to 140 to 200 ms. Why, and
+  No single option does it: mpv alone given each option by itself, eight runs each, showed its
+  first frame in 80 to 130 ms after its first runs, as with its defaults, while the six options of
+  the built-in scripts together, or all of the player's, brought it to 140 to 200 ms. That probe
+  is not in the repository; `time_to_the_first_frame` keeps the comparison of the whole sets. Why, and
   whether it holds with a real video output, is not known yet
   ([PLAN](PLAN.md#m13--mpv-driven-through-aerith-player)).
 - With its defaults, mpv alone gets faster run after run (243 to 80 ms), and with the player's

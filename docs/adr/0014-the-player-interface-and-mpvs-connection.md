@@ -38,8 +38,9 @@ messages, one writes the commands and turns mpv's messages into events.
 
 **Each open is numbered, and the events of a source carry its number** (`Started`, `Clock`,
 `Report`, `PictureFailed`, `Ended`). Every open ends with exactly one `Ended`, after one
-`Started` if its first frame was shown: an open that a later one replaced before it loaded ends as
-stopped. The player matches mpv's number for each entry to the open that made it. An entry that
+`Started` if its first frame was shown: an open that a later one replaced, or a stop ended, before
+it loaded ends as stopped, as mpv says nothing of it. Opens made from several threads reach the
+engine in the order of their numbers. The player matches mpv's number for each entry to the open that made it. An entry that
 is no open of Aerith's, such as a playlist's, is not reported; a source that turns out to be a
 playlist ends as failed and is stopped, because the player plays one media an open, and because a
 playlist's entries would not carry the source's headers.
@@ -103,8 +104,8 @@ through DRM. Its shader caches, and the GPU driver's, go to a folder Aerith name
   nominal speed; to decide with display sync, at M1.4.
 - **The headers as one global option, set before each load**: one command less, but mpv reads the
   option when its file opens, after the load has returned: a load that follows at once can give
-  its headers to the source before it. The closing review of M1.3 saw a token sent so, once in 390
-  tries.
+  its headers to the source before it. A test of the first version sent a token so, once in 390
+  tries of two opens in a row.
 - **One mpv per source**: nothing carried from one source to the next, by construction, but mpv's
   start at each open, unless a spare one is started ahead; options of each load give the same
   isolation for the headers.
@@ -133,6 +134,15 @@ through DRM. Its shader caches, and the GPU driver's, go to a folder Aerith name
   (`video-sync=display-resample`, up to 1 %), the position drifts by up to 36 s an hour.
 - The program that holds the player must ignore `SIGPIPE`, as Rust programs do unless told
   otherwise: a command written as mpv dies would otherwise end it.
+- The numbering relies on two orders mpv keeps today but documents only in part: its answer to a
+  load comes before that entry's `start-file`, and a reading's answer comes after the events mpv
+  sent before it. mpv's manual guarantees only that answers come in the order of the commands. A
+  later mpv that breaks them would show as an open that never starts, or a clock read with a stale
+  state; the tests against the real mpv would catch the first.
+- Between a playlist's `end-file` and the stop the player sends, mpv may start fetching the
+  playlist's first entry, without the source's headers. `--access-references=no` would stop mpv
+  from following playlists, but also Matroska's ordered chapters and other references: not
+  chosen.
 - On Windows, mpv takes the connection as an inherited named pipe (`handle://`) with overlapped
   I/O; M1.6 builds it.
 - CI's shell downloads mpv: 752 MiB once unpacked, with what it needs, shared in part with the

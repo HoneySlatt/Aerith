@@ -254,6 +254,30 @@ fn every_open_ends_once_and_starts_at_most_once() {
 }
 
 #[test]
+fn an_open_stopped_at_once_ends_once() {
+    let dir = TestDir::new("open-stop");
+    let clip = dir.clip(2);
+    let source = Source::file(&clip).unwrap();
+    for round in 0..10 {
+        // A fresh player each round: the open and the stop reach mpv as it starts.
+        let (player, events) = Player::start(&dir.settings(&[])).unwrap();
+        let open = player.open(&source).unwrap();
+        player.stop().unwrap();
+        wait_for(&events, |e| matches!(e, Event::Ended(o, _) if *o == open));
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while let Ok(event) =
+            events.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            assert!(
+                !matches!(event, Event::Ended(o, _) | Event::Started(o) if o == open),
+                "round {round}: {event:?} after the end"
+            );
+        }
+    }
+    dir.assert_home_untouched(&[]);
+}
+
+#[test]
 fn a_stream_carries_its_headers_and_no_secret_reaches_a_command_line() {
     let dir = TestDir::new("stream");
     let clip = dir.clip(3);

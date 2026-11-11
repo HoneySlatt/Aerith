@@ -18,7 +18,7 @@ pub const LONGEST_HEADER: usize = 8 << 10;
 /// Something to play.
 ///
 /// Its `Debug` output hides what may be secret: header values, and all of a stream's URL but its
-/// scheme and host.
+/// scheme and host, or but its scheme when the URL holds a user's part.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Source(Kind);
 
@@ -98,12 +98,16 @@ impl fmt::Debug for Source {
             Kind::Stream { url, headers } => {
                 // The scheme and the host only: a token may sit in the user's part, the path (a
                 // debrid resolver's key), the query or the fragment.
+                // A URL with a `@` anywhere before its query shows its scheme only: what precedes
+                // the `@` may be a password, even in a URL too malformed to tell where it ends.
                 let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
-                let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-                let host = authority
-                    .rsplit_once('@')
-                    .map_or(authority, |(_, host)| host);
-                let shown = format!("{scheme}://{host}/…");
+                let before_query = rest.split(['?', '#']).next().unwrap_or_default();
+                let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+                let shown = if before_query.contains('@') {
+                    format!("{scheme}://…")
+                } else {
+                    format!("{scheme}://{host}/…")
+                };
                 formatter
                     .debug_struct("Stream")
                     .field("url", &shown)
@@ -244,7 +248,7 @@ mod tests {
     fn debug_output_hides_secrets() {
         for url in [
             "https://host/video.mkv?api_key=secret1",
-            "https://user:secret1@host/resolve/realdebrid/secret1/h/f.mkv#t=secret1",
+            "https://host/resolve/realdebrid/secret1/h/f.mkv#t=secret1",
             "https://host",
         ] {
             let source =
@@ -254,6 +258,23 @@ mod tests {
             assert!(!shown.contains("secret"), "{shown}");
             assert!(shown.contains("https://host/…"), "{shown}");
             assert!(shown.contains("Authorization"), "{shown}");
+        }
+    }
+
+    #[test]
+    fn a_url_with_a_users_part_shows_its_scheme_only() {
+        // Written in pieces: the link check reads a whole one in the code as a malformed URL.
+        let scheme = "https://";
+        for rest in ["user:secret1@host/f.mkv", "user:pass/secret1@host/f.mkv"] {
+            let shown = format!(
+                "{:?}",
+                Source::stream(format!("{scheme}{rest}"), vec![]).unwrap()
+            );
+            assert!(
+                !shown.contains("secret") && !shown.contains("pass"),
+                "{shown}"
+            );
+            assert!(shown.contains(&format!("{scheme}…")), "{shown}");
         }
     }
 
