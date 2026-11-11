@@ -105,7 +105,7 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   nothing of the person's; headers are options of their own load, and no secret reaches a command
   line, a title or a log ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
   Tests: 46 unit tests, 35 of them on the mpv engine, most against a fake mpv; 12 against the
-  real mpv, for CI; the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
+  real mpv, which CI runs (green, 3 min 25 s on Linux); the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
   paused and stopped, asserted; 0 while playing, printed only. The player adds no measurable time
   to the first frame beside mpv with the same options, which make it 36 to 69 ms later than mpv's
   defaults, picture discarded; M1.2's figures drew the picture and are not comparable

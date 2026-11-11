@@ -204,7 +204,9 @@ as a clock. mpv's are mpv's; the bench compares them with mpv alone.
 |---|---|---|---|
 | `scripts/check.sh` | 33.3 s | 126.9 s | the whole check, warm, load about 1; before: the starting commit in a worktree of its own, load 8 to 11 |
 | Its steps without `scripts/test-check.sh` | – | 18.5 s | with `AERITH_CHECK_INNER=1` |
-| `cargo test -p aerith-player` | – | about 13 s | of which 9 s for `at_rest`, 2 s for the unit tests |
+| `cargo test -p aerith-player` | – | about 15 s | of which 9 s for `at_rest`, 5 s for the real-mpv tests, 2 s for the unit tests |
+| CI, Linux job | 71 s | 205 s | GitHub's own times for the `check` job of runs 42963265100 and 42985548274: Nix installed, mpv downloaded, then `scripts/check.sh` |
+| CI, Windows job | 40 s | 50 s | the `windows` job of the same runs |
 
 `scripts/test-check.sh` runs the whole test suite in six of its scratch copies, `at_rest`
 included: most of the growth is there.
