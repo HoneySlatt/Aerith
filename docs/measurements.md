@@ -274,3 +274,29 @@ by mistake. Its corrections were 1.000994 for the 23.976 and 59.94 fps clips and
 **In `agent-headless`.** The headless sway offers no `linux-dmabuf`, so mpv on RADV fails
 (`VK_ERROR_SURFACE_LOST_KHR`). lavapipe works only when named with `--vulkan-device`. It could
 not keep 60 Hz at 1080p, even with mpv's `fast` profile. Timing figures there are not tier figures.
+
+### The relay against a fake compositor
+
+Measured on 2026-11-11 on the high tier, in `nix develop`. Setup:
+- `tests/at_rest.rs`: the player shows its picture in a plane of a fake compositor's window
+  (`tests/common/host.rs`), which answers every commit at once;
+- mpv 0.42.0 draws through the relay with lavapipe, on a 320 × 240 clip at 24 frames a second;
+- Aerith's threads counted: `aerith-mpv`, `aerith-mpv-read` and `aerith-relay`.
+
+| State | Aerith's threads' wake-ups | mpv's |
+|---|---|---|
+| Playing | 124.5 to 145.0 a second, in four runs | 17,603 to 18,605 a second: lavapipe's rendering threads |
+| Paused | 0 in 2 s | 4 in 2 s |
+| Stopped | 0 in 2 s | 2 in 2 s |
+
+These are not tier figures: lavapipe draws on the CPU, and the fake compositor presents at once.
+They show the floor at rest holds with the relay. The playing figures on the owner's display come
+with the testbed.
+
+**The fuzz target** (`crates/aerith-player/fuzz`, `cargo fuzz run relay`):
+- 600 s: 134,631 executions, 224 a second;
+- 10,441 edges covered;
+- no crash, leak or timeout.
+
+Trial runs before it found three defects, fixed with tests
+([ADR-0018](adr/0018-what-building-the-relay-changed.md)).

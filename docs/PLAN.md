@@ -138,6 +138,17 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **Measured.** The first frame; at rest, 0 wake-ups of the player's and the relay's threads; the
   interface thread's and the relay's wake-ups a second while a film plays; mpv's memory while idle
   with its window ready; the check's and CI's time before and after.
+- **Where it stands** (2026-11-11).
+  - Done:
+    - the clock ([ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md));
+    - the relay, reviewed, corrected and fuzzed
+      ([ADR-0018](adr/0018-what-building-the-relay-changed.md)), with its tests against a fake
+      compositor and the real mpv
+      ([figures](measurements.md#the-relay-against-a-fake-compositor)).
+  - Next:
+    - the testbed;
+    - the corpus's SDR clips through it on the owner's display;
+    - the first frame and the wake-ups while playing.
 
 ### M1.4b — Inside the window, measured
 
@@ -216,8 +227,17 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
 - The player's report uses mpv's names for codecs, formats and colours, and says nothing of Dolby
   Vision yet (M1.5).
-- `--window` was run only where it fails (`agent-headless`, without a GPU): its picture on a real
-  display is untested.
+- The relay is tested against a fake compositor and lavapipe, never yet against a real
+  compositor or real dma-bufs (M1.4a's desktop run).
+- `tests/plane.rs`, the relay with the real mpv, runs only with `AERITH_TEST_WAYLAND=1`: it needs
+  lavapipe, and Mesa is 1.12 GB to add to every shell and CI job.
+- The relay's fuzz target runs by hand (`.#fuzz`), not in `scripts/check.sh` or CI; adding a short
+  run there is the owner's call, with the check's time.
+- A hostile mpv can make Aerith hold about 410 file descriptors at a peak, and wayland-rs panics
+  on two malformed messages that the relay refuses first: to raise upstream
+  ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
+- `scripts/test-check.sh` copies `.git` with tar: in a git worktree, where `.git` is a file, its
+  cases stage scratch files in the worktree's own index.
 - `scripts/check.sh` grew from 33 s to about two minutes: `scripts/test-check.sh` runs the whole
   test suite, `at_rest`'s 9 s included, in six of its copies. A lighter way for those copies is the
   owner's call ([figures](measurements.md#the-checks)).

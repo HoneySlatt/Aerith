@@ -1,6 +1,6 @@
 # 0015. mpv's picture through a relay on the interface's own Wayland connection
 
-- Status: Accepted
+- Status: Accepted; amended by 0018 (what mpv is offered, how its connection is bounded, what wakes)
 - Date: 2026-11-11
 
 ## Context
