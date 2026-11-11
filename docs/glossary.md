@@ -7,8 +7,15 @@ The terms Aerith coins or uses in a sense of its own.
 - **Engine**: what decodes and presents the video on a platform: mpv, Media3 or AVFoundation.
 - **Video plane**: the surface or system view where the engine presents the video, below the
   interface's surface, which the interface may not be able to read.
-- **Bench**: the scripts and test interface of Stage 1 that play the corpus and measure the budgets.
-- **Corpus**: the clips the bench plays, each with its source and licence.
+- **Bench**: the tool of Stage 1, `aerith-bench`, and its scripts, that play the corpus and measure
+  the budgets ([ADR-0013](adr/0013-the-bench.md)).
+- **Corpus**: the clips the bench plays, each with its source and licence
+  ([ADR-0012](adr/0012-the-test-corpus.md)).
+- **Beat**: in a generated clip, the frame that shows a white band and the instant of a 20 ms beep,
+  once every round(fps) frames, so that sound and image can be checked against each other.
+- **Run**: one rival playing one clip under the bench, which writes one `result.json`.
+- **Silent sound server**: the bench's own PipeWire, whose only output is a null sink; the rivals
+  play into it and see no sound device ([ADR-0013](adr/0013-the-bench.md)).
 - **Floor** and **lead**: an absolute budget that gates a milestone, and a margin over the best rival
   that becomes debt when missed ([ADR-0008](adr/0008-the-quality-bar.md)).
 - **Store build** and **full build**: the two variants of Aerith; the first without torrents and

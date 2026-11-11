@@ -11,8 +11,9 @@ Windows, macOS, iPhone, Apple TV, Android phones and Android TV, at a desk and o
 
 ## State
 
-Designed, not yet built. The Rust workspace and its checks exist; nothing can be run yet. The first
-stage, the player on the desktop, is under way.
+Designed, not yet built. The Rust workspace and its checks exist, and so does the bench that
+measures the rivals Aerith is held to (mpv, Kodi, Stremio, Jellyfin Desktop); Aerith itself plays
+nothing yet. The first stage, the player on the desktop, is under way.
 
 Aerith installs no content source of its own. What you play through it is your responsibility.
 

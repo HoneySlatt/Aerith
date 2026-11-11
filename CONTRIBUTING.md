@@ -19,17 +19,23 @@ It holds:
   ([ADR-0011](docs/adr/0011-a-pinned-stable-toolchain.md));
 - `cargo deny`, which enforces the dependency policy of `deny.toml`;
 - `git`, with which the checks list the repository's files and cargo deny fetches the advisories;
-- `lychee`, which checks links.
+- `lychee`, which checks links;
+- `bwrap` (bubblewrap), the bench's sandbox, which its tests run. It needs unprivileged user
+  namespaces; CI's Ubuntu runner turns them on first.
 
 The first entry downloads the toolchain, about 150 MB.
 
-Without Nix, rustup reads `rust-toolchain.toml` and installs the same toolchain; `cargo deny` and
-`lychee` are then yours to install. CI's Windows job works this way.
+The bench has a shell of its own, `nix develop .#bench`: the default shell's tools, plus what makes
+the test corpus and the rivals the bench measures ([below](#the-bench)). CI does not load it.
+
+Without Nix, rustup reads `rust-toolchain.toml` and installs the same toolchain; `cargo deny`,
+`lychee` and `bwrap` are then yours to install. CI's Windows job works this way.
 
 ## Building and testing
 
-There is nothing to run yet: `aerith-player` holds only its documentation until M1.3
-([`docs/PLAN.md`](docs/PLAN.md)). The commands that build and test the workspace:
+Aerith itself does not play yet: `aerith-player` holds only its documentation until M1.3
+([`docs/PLAN.md`](docs/PLAN.md)). The workspace also holds `aerith-bench`, the bench
+([below](#the-bench)). The commands that build and test the workspace:
 
 ```sh
 cargo build --workspace
@@ -72,6 +78,85 @@ platform of Stage 1.
 
 How long a full check takes is in
 [`docs/measurements.md`](docs/measurements.md#m11--the-workspace-and-its-checks).
+
+## The bench
+
+The bench measures the rivals, and later Aerith, against the quality bar
+([`docs/ROADMAP.md`](docs/ROADMAP.md#budgets)). It plays the test corpus
+([ADR-0012](docs/adr/0012-the-test-corpus.md)) in mpv alone, Kodi, Stremio or Jellyfin Desktop,
+and measures the time to the first frame, the frames dropped, delayed or mistimed, the sync, the
+memory, the CPU and the GPU's power ([ADR-0013](docs/adr/0013-the-bench.md)). Every command below
+runs inside `nix develop .#bench`.
+
+It plays no sound: the rivals play into the bench's own silent PipeWire and cannot see the sound
+devices. It plays nothing of yours: only the corpus.
+
+### The corpus
+
+```sh
+scripts/corpus.sh ~/.cache/aerith-bench/corpus
+```
+
+makes the corpus ([ADR-0012](docs/adr/0012-the-test-corpus.md#consequences) gives its time and
+size). It fetches about 740 MB first,
+each file checked against its pinned SHA-256: FFmpeg's test samples and three minutes of *Cosmos
+Laundromat*. Run again, it keeps the clips already made and checks them all. `--quick` makes a few
+seconds of each clip in a few minutes, to try the bench, not to measure; a folder holds one kind
+or the other, never both. It checks each clip's codec, colour, rate, size and length. On a slow
+machine, copy a corpus made elsewhere instead.
+
+### One run
+
+```sh
+cargo run --release -p aerith-bench -- run mpv ~/.cache/aerith-bench/corpus/hdr10-2160p-hevc10-eac3.mkv \
+    --seconds 60 --display "DP-3 3840x2160@240"
+```
+
+plays the clip for 60 seconds at most, fullscreen, and prints the path of its `result.json`, under
+`target/bench/`, beside the player's logs. `--stream` serves the clip over HTTP on 127.0.0.1 and
+plays it as a stream. `--idle N` reads the GPU's idle power for N seconds first (10 by default, 0
+to skip). `--mpv-option name=value` adds an option to mpv alone. `--display` is what you say of the
+screen: the bench cannot read it. `aerith-bench table <result.json>...` prints the table that
+compares runs.
+
+### The set of measures
+
+```sh
+scripts/bench-rivals.sh <desktop|short|laptop> ~/.cache/aerith-bench/corpus "<display>" [rival...]
+```
+
+runs every measure on every rival, or on those named, and writes `table.md` beside the runs:
+
+- `desktop`: the full set on the high tier, about 2.5 hours;
+- `short`: the same, with shorter runs, about 50 minutes;
+- `laptop`: the time to the first frame, memory, power, and cadence at 23.976, about one hour.
+
+Each rival takes the screen, fullscreen, for each of its runs. Nothing else may run meanwhile: other
+programs change the CPU, the cadence and the GPU's power. Each result says how many hardware
+threads they kept busy (`others_cores`, the table's "Other programs"); take again a run where it
+is not near zero. If a process of a run ever opens a sound device, the run exits with code 3 and the
+script stops at once. Each rival starts with a fresh profile and empty shader caches.
+`BENCH_SECONDS=2` shortens every run, to try the script.
+
+The bench needs a desktop session. In an agent's service, `agent-headless --` runs it without a
+GPU, which checks that it works but gives no figure: mpv alone needs `--mpv-option gpu-sw=yes`
+there, or `BENCH_MPV_OPTIONS=gpu-sw=yes` for the script. On the owner's desktop, an agent runs it through `owner-desktop --`, with the owner's go.
+
+### On the lowest laptop
+
+The owner runs this on the HP Laptop 17-ca2xxx, plugged in, nothing else open:
+
+1. Clone the repository and copy the corpus made on the desktop to `~/.cache/aerith-bench/corpus`
+   (making it there would take many hours).
+2. Close every other program. Set the screen's brightness as usual; it does not enter the figures.
+3. `nix develop .#bench --command scripts/bench-rivals.sh laptop ~/.cache/aerith-bench/corpus "<screen>"`,
+   with `<screen>` the laptop's screen as its display settings name it: output, size and rate.
+4. Leave the machine alone for about an hour. A rival that fails is reported, and the set goes on.
+5. Bring back the folder the script prints at the end (`target/bench/laptop-<date>/`), whole: its
+   `table.md` and every run's `result.json` and logs.
+
+The laptop's GPU power comes from the APU's sensor, when it has one; without it, the CPU time
+stands for power.
 
 ## A new file
 

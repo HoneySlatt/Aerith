@@ -160,6 +160,52 @@ Read 2026-11-10.
   ([Syncplay](https://github.com/Syncplay/syncplay/blob/master/syncplay/constants.py),
   [Jellyfin](https://github.com/jellyfin/jellyfin-web/blob/master/src/plugins/syncPlay/core/PlaybackCore.js)).
 
+## Test clips
+
+Read 2026-11-11, for the corpus ([ADR-0012](adr/0012-the-test-corpus.md)).
+
+- dovi_tool 2.3.4 generates Dolby Vision metadata for profiles 5, 8.1 and 8.4 only; x265 4.2 signals
+  5, 8.1, 8.2 and 8.4. No open encoder makes profile 7's enhancement layer
+  ([dovi_tool](https://github.com/quietvoid/dovi_tool)).
+- FFmpeg 9.0.2 encodes E-AC3, and TrueHD and DTS core as experimental encoders; nothing open
+  encodes DTS-HD MA, DTS:X or Atmos. Two young projects claim a DTS-HD MA encoder, unverified:
+  `callumcomplains/subwoofa` (GPL-3.0) and `B00kerLouis/Swift_DTSHDMAX` (research-only licence).
+- FFmpeg's test suite ([fate-suite.ffmpeg.org](https://fate-suite.ffmpeg.org/)) holds Dolby Vision
+  profile 7 samples (`mpegts/dovi-p7.ts`, `mkv/dovi-p7-hvce.mkv`), DTS-HD MA 7.1
+  (`dts/master_audio_7.1_24bit.dts`), DTS:X (`dts/dtsx_7.1.4_24bit.dts`) and TrueHD Atmos
+  (`truehd/atmos.thd`), from 10 KB to 6.3 MB, under no stated terms. No E-AC3 with Atmos.
+- Netflix Open Content is under CC BY 4.0
+  ([opencontent.netflix.com](https://opencontent.netflix.com/)). *Cosmos Laundromat*'s
+  `CosmosLaundromat_2k24p_HDR_P3PQ.mp4` (730 MB) is 8-bit H.264, 2048 × 858, with no colour tags;
+  read with ffprobe. A 2018 licence file of *Meridian* says CC BY-NC-ND 4.0, against the page.
+- The Blender films are under CC BY 3.0 or 4.0, all SDR
+  ([Big Buck Bunny](https://peach.blender.org/about/), [Tears of Steel](https://mango.blender.org/about/)).
+- Jellyfin's test videos are under CC BY-SA 4.0: SDR, HDR10, Dolby Vision 5, 8.1 and 8.4, no
+  profile 7, no HLG ([repo.jellyfin.org](https://repo.jellyfin.org/test-videos/)).
+- Kodi's wiki lists vendor demonstrations with profile 7, DTS-HD MA, DTS:X and Atmos, under "fair
+  use is claimed", on third-party hosts.
+
+## The rivals' engines
+
+Read 2026-11-11 in their sources, at the versions `flake.lock` pins: mpv 0.42.0
+([mpv](https://github.com/mpv-player/mpv)), Kodi 21.3 ([xbmc](https://github.com/xbmc/xbmc)),
+stremio-linux-shell 1.2.2 ([Stremio](https://github.com/Stremio/stremio-linux-shell)), Jellyfin
+Desktop 2.0.0-unstable-2026-08-31 ([jellyfin-desktop](https://github.com/jellyfin/jellyfin-desktop))
+([ADR-0013](adr/0013-the-bench.md)).
+
+- mpv publishes `frame-drop-count`, `decoder-frame-drop-count`, `vo-delayed-frame-count`,
+  `mistimed-frame-count` and `avsync`, and lets `input-ipc-server` change at run time.
+- Kodi's JSON-RPC listens on 127.0.0.1:9090 in a fresh profile. Its dropped and skipped frames and
+  its audio-video difference reach only its overlay; its debug log has `dropped in output` lines
+  and its audio engine's `average error`. `Player.OnAVStart` marks the start of playback.
+- Stremio's shell and Jellyfin Desktop embed libmpv through the render API in OpenGL. Neither reads
+  an `mpv.conf` nor opens mpv's socket. Stremio's shell lets a page send any mpv command, but
+  observe only a fixed list of properties. Jellyfin Desktop's `userCommand` runs an mpv command
+  line; it chooses the sound track itself when a file loads.
+- Stremio's shell never sets `hwdec`: its mpv decodes in software. Jellyfin Desktop's mpv uses
+  `vaapi-copy`, and downmixes to 2.0 by default; so does Kodi (2.0 by default).
+- Stremio's streaming server (`server.js`) is not free software.
+
 ## Building blocks
 
 Read 2026-11-10; candidates for the stages that need them, each decided then.

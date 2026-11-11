@@ -16,14 +16,17 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - **Stage 1, the player on the desktop**
   ([ADR-0003](adr/0003-mpv-in-its-own-process.md)): under way. M1.1 done on 2026-11-11: the Cargo
   workspace, the toolchain pinned ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)), every check
-  in CI on Linux, and the Rust checks on Windows. Next: M1.2.
+  in CI on Linux, and the Rust checks on Windows. M1.2 under way: the corpus
+  ([ADR-0012](adr/0012-the-test-corpus.md)) and the bench ([ADR-0013](adr/0013-the-bench.md)) are
+  built and run; mpv alone and part of Kodi are measured on the high tier. Waiting on the owner:
+  the rest of the rivals on the desktop, the lowest laptop, and the bar's figures.
 
 ## Status
 
 | Milestone | Goal | Status |
 |---|---|---|
 | [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Done |
-| [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | Planned |
+| [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | In progress |
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Planned |
 | [M1.4](#m14--mpv-inside-aeriths-window-on-linux) | mpv's picture sits inside Aerith's window on Linux, under a test interface | Planned |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
@@ -65,6 +68,20 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **How to test.** The bench script, documented in `CONTRIBUTING.md`.
 - **Measured.** Every rival figure, with its version, settings and date.
 - **By hand.** The owner runs the lowest laptop's measures if the agent cannot reach it.
+- **Where it stands** (2026-11-11). Built and run: `scripts/corpus.sh`, whose corpus passes its own
+  checks; `aerith-bench` and `scripts/bench-rivals.sh`, tried on every rival in
+  `agent-headless` and on the owner's desktop. Measured on the high tier, by the `short` set: mpv
+  alone's 25 runs and Kodi's first 7, beside other sessions' builds
+  ([figures](measurements.md#m12--the-rivals-on-the-high-tier)). The owner then needed the machine
+  and the set was stopped. Left, each on the owner's go:
+  1. on the desktop, with nothing else running:
+     `owner-desktop -- nix develop .#bench -c scripts/bench-rivals.sh short ~/.cache/aerith-bench/corpus "<screen>" kodi stremio jellyfin`,
+     then the `desktop` set (10 minutes of cadence per rate; the floor's 30 minutes is the
+     owner's call), and mpv's three HDR10 first-frame runs again on an idle machine;
+  2. cadence at 60 Hz, and with VRR if the owner wants it: the owner switches the monitor's mode;
+  3. the lowest laptop, by the owner ([CONTRIBUTING](../CONTRIBUTING.md#on-the-lowest-laptop));
+  4. the bar's figures, set from all of these with the owner: the power margin, the image
+     tolerance, the first frame's lead.
 
 ### M1.3 — mpv driven through `aerith-player`
 
@@ -113,6 +130,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 
 ## Ideas
 
+- Measure sync for real: capture the screen's beat with a photodiode or a camera, and the sound
+  through a loopback, against the corpus's 20 ms beeps.
+
 - Contribute to mpv the Vulkan render API its maintainers described, so that the video becomes a
   texture of the interface ([ADR-0003](adr/0003-mpv-in-its-own-process.md)).
 - The player screen as uwui's screen of reference for glass over moving content.
@@ -121,7 +141,13 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 
 ## Known debt
 
-None.
+- The bench's sync figure is each engine's own estimate, without the sound card's latency; a
+  capture of the corpus's beat would measure the real one ([ADR-0013](adr/0013-the-bench.md)).
+- Kodi's frame figure is a lower bound (its log's output drops only), and its sync is read only
+  when its audio engine logs it.
+- For Stremio and Jellyfin Desktop, the time to the first frame is their engine's, not their
+  interface's: the bench loads the clip itself.
+- E-AC3 with Atmos has no source in the corpus ([ADR-0012](adr/0012-the-test-corpus.md)).
 
 Finished stages move to `docs/history.md`, in a few lines each, so that this file holds the current
 stage only, under about 2,000 words.

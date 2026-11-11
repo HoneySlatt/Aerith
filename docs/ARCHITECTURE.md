@@ -1,7 +1,8 @@
 # Architecture
 
 This file describes the parts the decisions call for; it is rewritten to the code as each part is
-built. Of them, only `aerith-player`'s crate exists, and it holds only its documentation.
+built. Of Aerith's own parts, only `aerith-player`'s crate exists, and it holds only its
+documentation. The bench, a tool beside Aerith, exists.
 
 ## The workspace
 
@@ -21,6 +22,20 @@ is in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 - **The core** (Stage 2): addon protocol, accounts, storage, sources, the I/O layer. It needs no
   window and no GPU.
 - **The interface** (Stage 3): on uwui ([ADR-0005](adr/0005-the-interface-on-uwui-a-later-client.md)).
+
+## The bench
+
+`aerith-bench` is a program apart, not part of what users run ([ADR-0013](adr/0013-the-bench.md)).
+It depends on nothing of Aerith yet; at M1.4 it will measure Aerith through `aerith-player`.
+
+- `run` makes one run: `sandbox` is the bubblewrap namespace every program of the run starts in
+  (no sound device, the run's own home), `audio` starts the silent sound server, `rivals` starts a
+  rival, `engine` drives the rival's engine over
+  `json_stream` (mpv's IPC, Kodi's JSON-RPC), `sampler` reads memory, CPU and GPU power each
+  second, `serve` serves the clip over HTTP when the run is a stream, and `figures` turns the
+  readings into the figures of `result.json`.
+- `scripts/corpus.sh` makes the corpus it plays ([ADR-0012](adr/0012-the-test-corpus.md));
+  `scripts/bench-rivals.sh` runs its set of measures on every rival.
 
 ## Rules that hold across parts
 

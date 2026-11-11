@@ -33,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      # Ubuntu's AppArmor forbids unprivileged user namespaces, which the bench's sandbox and its
+      # tests need (ADR-0013).
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: nix develop --no-update-lock-file --command scripts/check.sh
 
   # Windows is a platform of Stage 1: the checks that read Rust code run there from the start, so that

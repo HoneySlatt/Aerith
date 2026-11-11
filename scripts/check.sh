@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 # Outside the shell, cargo deny or lychee may be missing, and cargo may be a compiler other than the
 # one rust-toolchain.toml pins.
-for tool in git cargo rustc cargo-deny lychee; do
+for tool in git cargo rustc cargo-deny lychee bwrap; do
     command -v "$tool" >/dev/null || {
         echo "$tool is missing; run this script inside the development shell:" \
             "nix develop --command scripts/check.sh" >&2

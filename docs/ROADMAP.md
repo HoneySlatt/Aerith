@@ -30,7 +30,8 @@ drawn at 240 Hz and still at rest.
 ## Quality bar
 
 Accepted by the owner on 2026-11-11 ([ADR-0008](adr/0008-the-quality-bar.md)). Its figures are set
-by measuring the rivals first, at M1.2; until then the budgets below are starting points.
+by measuring the rivals first, at M1.2; until the owner accepts them, the budgets below are
+starting points.
 
 ### How the bar works
 
@@ -56,7 +57,7 @@ by measuring the rivals first, at M1.2; until then the budgets below are startin
 
 | Tier | Machine | State |
 |---|---|---|
-| Desktop, high | The owner's desktop: 8 cores (Ryzen 7 5800X), an RX 6900 XT class GPU, 32 GB, 3840 × 2160 at 240 Hz with VRR, HDR monitor; Umbriel on wlroots 0.20 | measurable |
+| Desktop, high | The owner's desktop: 8 cores (Ryzen 7 5800X), an RX 6900 XT class GPU, 32 GB, 3840 × 2160 at 240 Hz, HDR monitor; Umbriel on wlroots 0.20. The monitor can do VRR, but the owner turned it off: it flickers. A VRR measure is taken only when the owner turns it on for it | measurable |
 | Desktop, lowest | The owner's HP Laptop 17-ca2xxx: AMD Athlon Silver 3050U (2 cores), integrated Vega, 4 GB on one channel; measured on mains power | measurable |
 | Phone, high | The owner's Pixel (model recorded with the first measure) | measurable |
 | Phone, lowest | The owner's mid-range Android phone (model recorded with the first measure) | measurable |
@@ -70,23 +71,27 @@ device's display.
 
 ### Budgets
 
-The starting points; M1.2 measures the rivals and sets each figure.
+The targets are the starting points; M1.2 measures the rivals and sets each figure. The last column
+gives what M1.2 has measured so far on the high tier, from
+[`measurements.md`](measurements.md#m12--the-rivals-on-the-high-tier): mpv alone and part of Kodi.
+Stremio, Jellyfin Desktop and the lowest laptop are still to measure; each target's figure is set
+once they are, with the owner.
 
-| Budget | Kind | Target | Measured by | Checked in |
-|---|---|---|---|---|
-| At rest | floor | 0 frames drawn, 0 wake-ups a second of Aerith's own, playback paused or stopped | `pidstat -w`, `/proc/<pid>/status` | by hand at each milestone touching it |
-| Cadence | floor | No frame dropped or repeated without a cause shown, over 30 min, for 23.976 to 60 fps content, at 60 Hz, at 240 Hz and with VRR | the player's frame statistics and the compositor's presentation feedback | the Stage 1 bench, by hand |
-| Sound and image | floor | Within ±20 ms over 30 min, after seeks and pauses | the bench's sync clip | the Stage 1 bench |
-| Image | floor | The same picture as mpv alone, same version and options, within a tolerance set at M1.2 | captured frames compared | the Stage 1 bench |
-| HDR and Dolby Vision | floor | Each clip of the corpus reaches the display with the colour description expected | the colour description read back on each path | the Stage 1 bench |
-| Passthrough | floor | The bitstream sent is identical to the source's, for E-AC3, TrueHD, DTS and DTS-HD | a capture of what the audio output receives | by hand at each engine milestone |
-| Power while playing | lead | At most mpv alone's, plus a margin set at M1.2, on the lowest laptop | the GPU's `power1_average`; the CPU's time | by hand |
-| Memory while playing | floor | The cache bounded in bytes; a 4K remux plays on the lowest laptop without swap | the resident size, the cache's own count | by hand |
-| Press Play to first frame | lead | Ahead of the best rival, for a local file and for a stream on the LAN | the bench | by hand |
-| Interface response | floor | Input to visible response within one frame, 4.17 ms at 240 Hz, at the 99th percentile (from Stage 3) | uwui's frame statistics | by hand |
-| Start | floor | First useful frame within 100 ms warm and 500 ms cold, as uwui's bar (from Stage 3) | `hyperfine`, the first frame's time | by hand |
-| Stability | floor | 99.9 % of hours without a crash; each crash leaves a report kept on the machine | the crash reports | at each stage audit |
-| CI | floor | Each job under 20 min | CI's own times | CI |
+| Budget | Kind | Target | Measured by | Checked in | Rivals measured (M1.2) |
+|---|---|---|---|---|---|
+| At rest | floor | 0 frames drawn, 0 wake-ups a second of Aerith's own, playback paused or stopped | `pidstat -w`, `/proc/<pid>/status` | by hand at each milestone touching it | not measured: Aerith's own |
+| Cadence | floor | No frame dropped or repeated without a cause shown, over 30 min, for 23.976 to 60 fps content, at 60 Hz, at 240 Hz and with VRR | the player's frame statistics and the compositor's presentation feedback | the Stage 1 bench, by hand | mpv on 240 Hz: 0 dropped, 0 delayed, 2 min at 23.976 and at 59.94, 1 min at 25 (3.2 threads busy elsewhere). Repeated frames and the compositor's feedback not read; 60 Hz and VRR not measured |
+| Sound and image | floor | Within ±20 ms over 30 min, after seeks and pauses | the engine's own estimate (ADR-0013); a capture of the beat later | the Stage 1 bench | mpv: under 0.05 ms, its estimate without the card's latency; no seek or pause measured |
+| Image | floor | The same picture as mpv alone, same version and options, within a tolerance set at M1.2 | captured frames compared | the Stage 1 bench | not measured: needs Aerith's frames (M1.4) |
+| HDR and Dolby Vision | floor | Each clip of the corpus reaches the display with the colour description expected | the colour description read back on each path | the Stage 1 bench | mpv tone-maps every HDR clip to SDR on the owner's SDR desktop; HDR output is M1.5's |
+| Passthrough | floor | The bitstream sent is identical to the source's, for E-AC3, TrueHD, DTS and DTS-HD | a capture of what the audio output receives | by hand at each engine milestone | not measured: M1.5 |
+| Power while playing | lead | At most mpv alone's, plus a margin set at M1.2, on the lowest laptop | the GPU's `power1_average`; the CPU's time | by hand | high tier, over idle: mpv +6.6 W, Kodi +14.5 W (4K HDR10 remux); mpv +2.2 W (1080p 23.976). Laptop not measured |
+| Memory while playing | floor | The cache bounded in bytes; a 4K remux plays on the lowest laptop without swap | the resident size, the cache's own count | by hand | high tier, peak PSS on a 4K remux: mpv 262 MiB, Kodi 430 MiB. Laptop not measured |
+| Press Play to first frame | lead | Ahead of the best rival, for a local file and for a stream on the LAN | the bench, from a file and from HTTP on loopback | by hand | median, 4K HDR10: Kodi 342 ms (file), 391 ms (stream); mpv 617 and 690 ms under load, 390–445 ms on other clips at rest |
+| Interface response | floor | Input to visible response within one frame, 4.17 ms at 240 Hz, at the 99th percentile (from Stage 3) | uwui's frame statistics | by hand | – |
+| Start | floor | First useful frame within 100 ms warm and 500 ms cold, as uwui's bar (from Stage 3) | `hyperfine`, the first frame's time | by hand | – |
+| Stability | floor | 99.9 % of hours without a crash; each crash leaves a report kept on the machine | the crash reports | at each stage audit | – |
+| CI | floor | Each job under 20 min | CI's own times | CI | – |
 
 ### Without a figure
 
@@ -114,6 +119,8 @@ The starting points; M1.2 measures the rivals and sets each figure.
 | Stages | Their order ([ADR-0009](adr/0009-the-order-of-the-stages.md)) |
 | Logo | Aerith's mark, outside the MPL ([ADR-0010](adr/0010-the-logo.md)) |
 | Toolchain | Stable Rust pinned; a nightly only for the checks that need one ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)) |
+| Test corpus | Generated where free tools can; Dolby Vision 7, DTS-HD, DTS:X, TrueHD Atmos and real footage fetched and pinned ([ADR-0012](adr/0012-the-test-corpus.md)) |
+| The bench | A Rust tool driving each rival's engine, sound silenced, no sound device in reach ([ADR-0013](adr/0013-the-bench.md)) |
 
 ### Open
 
@@ -122,7 +129,6 @@ Each is decided by an ADR at the stage where it becomes necessary, not earlier.
 | Topic | Candidates | Decide at |
 |---|---|---|
 | The Windows montage | mpv's child window under DirectComposition; other routes the bench finds | M1.6 |
-| The test corpus | Clips Aerith generates; freely licensed clips; vendor test streams | M1.2 |
 | Storage | SQLite (rusqlite) with a schema ready for sync: a clock per field, tombstones | Stage 2 |
 | The Stremio protocol | Aerith's own types from the specification, stremio-core's as a test oracle | Stage 2 |
 | Nuvio sync | Its Supabase API, tested against a pinned self-hosted backend | Stage 2 |

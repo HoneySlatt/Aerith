@@ -10,8 +10,9 @@ macOS, iPhone, Apple TV, Android phones and Android TV, at a desk and on a couch
 be written on uwui, the owner's UI framework, which is not ready yet. It is licensed under MPL-2.0
 ([ADR-0002](docs/adr/0002-mpl-2-0.md)).
 
-Its real state: the design is done; the Cargo workspace and its checks exist (M1.1), with one crate,
-`aerith-player`, that holds only its documentation. Stage 1, the player on the desktop, is under way.
+Its real state: the design is done; the Cargo workspace and its checks exist (M1.1), with
+`aerith-player`, which holds only its documentation, and the bench, `aerith-bench`, which measures
+the rivals (M1.2). Stage 1, the player on the desktop, is under way.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
 understand it from the repository alone. Documentation is part of every deliverable.
@@ -40,9 +41,10 @@ You remember nothing from earlier sessions. What is not written in these files i
 ```sh
 nix develop          # the development shell: every tool the checks use
 scripts/check.sh     # every check of the definition of done; what CI runs
+nix develop .#bench  # the bench's shell: the corpus's tools and the rivals
 ```
 
-`CONTRIBUTING.md` holds the commands to build, test and run each check alone.
+`CONTRIBUTING.md` holds the commands to build, test and run each check alone, and to run the bench.
 
 Never on your own:
 
