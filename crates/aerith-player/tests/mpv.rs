@@ -129,8 +129,11 @@ fn a_seek_past_the_end_ends_a_playing_source_and_keeps_a_paused_one_on_its_last_
         unreachable!()
     };
     assert!(!clock.running, "{clock:?}");
+    // At the last frame: mpv's encoder starts these clips two frames in (0.083 s), so a 3 s clip
+    // ends at 3.083 s; mpv has read its position between 2.958 and 3.053 s. The bound is that end
+    // plus one frame.
     assert!(
-        clock.position <= Duration::from_secs(3),
+        clock.position <= Duration::from_millis(3_125),
         "the last frame: {clock:?}"
     );
     // It stays there: no end comes.
