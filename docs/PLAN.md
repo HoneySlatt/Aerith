@@ -154,6 +154,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
       - the first frame in about 70 ms with caches kept, against about 80 ms for mpv alone;
       - the window's thread woke about 50 times a second while a film played, the relay's 142.
     - the closing review, its findings fixed or recorded below.
+  - Left, on the owner's go: the five other `audio-*` clips through the testbed on the owner's
+    display, about a minute; then M1.4a is done.
 
 ### M1.4b — Inside the window, measured
 
