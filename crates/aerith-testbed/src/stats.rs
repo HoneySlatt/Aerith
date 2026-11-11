@@ -39,7 +39,8 @@ fn parse_switches(status: &str) -> Option<Switches> {
 }
 
 /// The id of this process's thread named `name`, if one runs. Linux keeps the first 15 bytes of a
-/// thread's name.
+/// thread's name. A scan of `/proc/self/task` may miss a thread while others start or end: the
+/// caller looks again later rather than take an absence as final.
 pub fn thread_named(name: &str) -> Option<u32> {
     fs::read_dir("/proc/self/task")
         .ok()?
@@ -205,15 +206,26 @@ mod tests {
     }
 
     #[test]
-    fn this_threads_own_switches_and_name_are_found() {
+    fn a_threads_switches_are_found_by_its_name() {
+        // The thread is looked for once `spawn` has returned and the thread runs, and waits until
+        // it was found: its name is in place by then, whichever thread sets it.
+        let (running, started) = std::sync::mpsc::channel();
+        let (found, done) = std::sync::mpsc::channel::<()>();
         let thread = std::thread::Builder::new()
             .name("aerith-stats-tst".to_owned())
-            .spawn(|| {
-                // Linux keeps 15 bytes of the name.
-                let tid = thread_named("aerith-stats-ts").expect("the thread by its name");
-                thread_switches(tid).expect("its switches")
+            .spawn(move || {
+                running.send(()).unwrap();
+                done.recv().unwrap();
             })
             .unwrap();
+        started.recv().unwrap();
+        // Linux keeps 15 bytes of the name. Other tests' threads start and end meanwhile, and a
+        // scan may miss this one: looked for a few times, as the stats loop looks each second.
+        let tid = (0..100)
+            .find_map(|_| thread_named("aerith-stats-ts"))
+            .expect("the thread by its name");
+        assert!(thread_switches(tid).is_some(), "its switches");
+        found.send(()).unwrap();
         thread.join().unwrap();
         assert_eq!(thread_named("no-such-thread"), None);
     }

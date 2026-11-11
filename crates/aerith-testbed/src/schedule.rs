@@ -192,7 +192,12 @@ fn run(
             (&stats, progress.next_stats, progress.opened)
             && due(next)
         {
-            let relay = *relay_thread.get_or_insert_with(|| stats::thread_named("aerith-relay"));
+            // Looked for until found: a scan of the process's threads can miss one while others
+            // start or end.
+            if relay_thread.is_none() {
+                relay_thread = stats::thread_named("aerith-relay");
+            }
+            let relay = relay_thread;
             print_line(&stats::line(&sample(source, opened, relay, now)));
             // A late tick is skipped, not caught up.
             let mut following = next + STATS_EVERY;
@@ -220,9 +225,7 @@ fn run(
         }
     }
     if let (Some(source), Some(opened)) = (&stats, progress.opened) {
-        let relay = relay_thread
-            .flatten()
-            .or_else(|| stats::thread_named("aerith-relay"));
+        let relay = relay_thread.or_else(|| stats::thread_named("aerith-relay"));
         let first_frame = progress.first_frame.map(|first| first - opened);
         let sample = sample(source, opened, relay, Instant::now());
         print_line(&stats::summary(&sample, first_frame));
