@@ -12,7 +12,7 @@
 //!
 //! On Linux the engine is mpv, a program apart driven over its IPC ([ADR-0003]); the documentation
 //! of the crate's `mpv` module, in `src/mpv.rs`, says how. Its picture is discarded, or shown in a
-//! [`Plane`] of the interface's Wayland window, through a relay of the player's ([ADR-0015]; the
+//! `Plane` of the interface's Wayland window, through a relay of the player's ([ADR-0015]; the
 //! crate's `relay` module, in `src/relay/`). Windows joins at milestone M1.6 of the [plan], Android
 //! and Apple at their stages. Tracks, subtitles and speed join the interface when a milestone
 //! needs them.
