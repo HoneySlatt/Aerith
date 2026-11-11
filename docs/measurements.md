@@ -15,8 +15,8 @@ Measured on 2026-11-11 on the high tier ([ROADMAP](ROADMAP.md#hardware)), Rust 1
 | Its last step, `scripts/test-check.sh` | about 7 s of the above | 19 scratch copies, one per case |
 | The other steps, warm | 1.1 to 1.5 s | the same, with `AERITH_CHECK_INNER=1`, which skips the last step |
 | `cargo deny --locked check` alone | 0.8 to 1.0 s | mostly the advisory database's fetch |
-| CI, Linux job | not measured yet | GitHub's own time for the `check` job, from a fresh runner: Nix installed, toolchain downloaded |
-| CI, Windows job | not measured yet | GitHub's own time for the `windows` job, toolchain installed by rustup |
+| CI, Linux job | 42 s | GitHub's own time for the `check` job of run 42938126550, from a fresh runner: Nix installed, toolchain downloaded |
+| CI, Windows job | 35 s | GitHub's own time for the `windows` job of the same run, toolchain installed by rustup |
 
 Budget: each CI job under 20 minutes (a floor). Each job's timeout is set to it. The local check has
 no budget of its own yet.

@@ -14,15 +14,15 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   session in uwui's repository is deciding uwui's platform targets (macOS, iOS, tvOS, Android TV),
   HDR and the video element; its answers are recorded in `uwui-needs.md` when they come.
 - **Stage 1, the player on the desktop**
-  ([ADR-0003](adr/0003-mpv-in-its-own-process.md)): under way. M1.1 in review, waiting for CI: the
-  Cargo workspace, the toolchain pinned ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)), every
-  check in CI on Linux, and the Rust checks on Windows. Next: M1.2.
+  ([ADR-0003](adr/0003-mpv-in-its-own-process.md)): under way. M1.1 done on 2026-11-11: the Cargo
+  workspace, the toolchain pinned ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)), every check
+  in CI on Linux, and the Rust checks on Windows. Next: M1.2.
 
 ## Status
 
 | Milestone | Goal | Status |
 |---|---|---|
-| [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | In review: waiting for CI |
+| [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Done |
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | Planned |
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Planned |
 | [M1.4](#m14--mpv-inside-aeriths-window-on-linux) | mpv's picture sits inside Aerith's window on Linux, under a test interface | Planned |
@@ -45,7 +45,7 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **Done when.** `nix develop -c scripts/check.sh` passes locally and CI is green.
 - **How to test.** `nix develop -c scripts/check.sh`.
 - **Measured.** The check's time, warm and cold; CI's job time (under 20 min).
-- **Result.** Checks pass locally on 2026-11-11; CI not yet run. Beyond what it was to deliver: a
+- **Result.** Done on 2026-11-11, CI green (42 s on Linux, 35 s on Windows). Beyond what it was to deliver: a
   check that every file carries the MPL-2.0 header, one on `AGENTS.md`'s length,
   `scripts/test-check.sh`, which proves that each check fails when it should, and a Windows job in
   CI for the lints, the tests and the documentation. `deny.toml` admits MPL-2.0 and permissive
