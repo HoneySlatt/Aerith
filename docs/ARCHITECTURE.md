@@ -38,6 +38,8 @@ caller ◀── Event (Started, Clock, Report…) ─────────�
 - Each command goes to the engine thread's inbox and returns. The engine thread writes it to mpv.
 - The reader thread blocks on the socket and puts each of mpv's messages, one JSON value a line,
   in the same inbox. The engine thread turns them into events on the caller's channel.
+- Each `open` is numbered; the engine thread matches mpv's number for the playlist entry each
+  load makes to it, and the events of a source carry the open's number.
 - Both threads sleep until something arrives: a paused or idle player wakes nothing up.
 - When mpv ends, the reader sees the connection close; the engine thread reaps mpv and sends
   `EngineFailed`. When the player is dropped, it closes the connection; mpv quits.

@@ -17,8 +17,8 @@ pub const LONGEST_HEADER: usize = 8 << 10;
 
 /// Something to play.
 ///
-/// Its `Debug` output hides what may be secret: header values, and the query of a stream's URL,
-/// where servers often put a token.
+/// Its `Debug` output hides what may be secret: header values, and all of a stream's URL but its
+/// scheme and host.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Source(Kind);
 
@@ -96,10 +96,14 @@ impl fmt::Debug for Source {
         match &self.0 {
             Kind::File(path) => formatter.debug_tuple("File").field(path).finish(),
             Kind::Stream { url, headers } => {
-                let shown = match url.split_once('?') {
-                    Some((before, _)) => format!("{before}?…"),
-                    None => url.clone(),
-                };
+                // The scheme and the host only: a token may sit in the user's part, the path (a
+                // debrid resolver's key), the query or the fragment.
+                let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+                let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+                let host = authority
+                    .rsplit_once('@')
+                    .map_or(authority, |(_, host)| host);
+                let shown = format!("{scheme}://{host}/…");
                 formatter
                     .debug_struct("Stream")
                     .field("url", &shown)
@@ -132,9 +136,10 @@ impl Header {
         // RFC 9110's token characters.
         let token = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c);
         if name.is_empty() || !name.chars().all(token) {
-            return Err(InvalidSource(format!(
-                "{name:?} is not a valid header name"
-            )));
+            // The name is not repeated: a header pasted whole, value included, lands here.
+            return Err(InvalidSource(
+                "a header name is empty or holds a character HTTP does not allow".to_owned(),
+            ));
         }
         if value.chars().any(|c| c.is_control() && c != '\t') {
             return Err(InvalidSource(format!(
@@ -237,14 +242,24 @@ mod tests {
 
     #[test]
     fn debug_output_hides_secrets() {
-        let source = Source::stream(
+        for url in [
             "https://host/video.mkv?api_key=secret1",
-            vec![Header::new("Authorization", "secret2").unwrap()],
-        )
-        .unwrap();
-        let shown = format!("{source:?}");
-        assert!(!shown.contains("secret"), "{shown}");
-        assert!(shown.contains("https://host/video.mkv"), "{shown}");
-        assert!(shown.contains("Authorization"), "{shown}");
+            "https://user:secret1@host/resolve/realdebrid/secret1/h/f.mkv#t=secret1",
+            "https://host",
+        ] {
+            let source =
+                Source::stream(url, vec![Header::new("Authorization", "secret2").unwrap()])
+                    .unwrap();
+            let shown = format!("{source:?}");
+            assert!(!shown.contains("secret"), "{shown}");
+            assert!(shown.contains("https://host/…"), "{shown}");
+            assert!(shown.contains("Authorization"), "{shown}");
+        }
+    }
+
+    #[test]
+    fn a_refused_header_name_is_not_repeated() {
+        let error = Header::new("Authorization: Bearer secret", "x").unwrap_err();
+        assert!(!error.to_string().contains("secret"), "{error}");
     }
 }

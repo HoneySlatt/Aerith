@@ -18,6 +18,10 @@ use std::time::Duration;
 use aerith_player::{Ending, Event, Player, Source};
 use common::{TestDir, wait_for};
 
+/// How long the events a change brings are given to arrive, on a loaded machine, before the
+/// watch: one that came during it would count as a wake-up.
+const SETTLE: Duration = Duration::from_secs(1);
+
 /// How long each state is watched: a wake-up once a second, the slowest a timer would plausibly
 /// take, shows at least once.
 const WATCHED: Duration = Duration::from_secs(2);
@@ -58,8 +62,8 @@ fn a_paused_or_stopped_player_wakes_none_of_aeriths_threads() {
     let dir = TestDir::new("rest");
     let clip = dir.clip(20);
     let (player, events) = Player::start(&dir.settings(&[])).unwrap();
-    player.open(&Source::file(&clip).unwrap()).unwrap();
-    wait_for(&events, |e| *e == Event::Started);
+    let open = player.open(&Source::file(&clip).unwrap()).unwrap();
+    wait_for(&events, |e| *e == Event::Started(open));
     // Counted once they run: a thread takes its name as it starts.
     let found = fs::read_dir("/proc/self/task")
         .unwrap()
@@ -71,7 +75,7 @@ fn a_paused_or_stopped_player_wakes_none_of_aeriths_threads() {
         .count();
     assert_eq!(found, 2, "the player's two threads are found by name");
     let mpv = common::mpv_of(&dir)[0];
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(SETTLE);
     let (player_playing, mpv_playing) = watch(mpv);
     let seconds = WATCHED.as_secs_f64();
     eprintln!(
@@ -82,7 +86,7 @@ fn a_paused_or_stopped_player_wakes_none_of_aeriths_threads() {
 
     player.pause().unwrap();
     wait_for(&events, |e| *e == Event::Paused(true));
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(SETTLE);
     while events.try_recv().is_ok() {}
     let (player_paused, mpv_paused) = watch(mpv);
     eprintln!(
@@ -92,8 +96,8 @@ fn a_paused_or_stopped_player_wakes_none_of_aeriths_threads() {
     assert!(events.try_recv().is_err(), "and no event");
 
     player.stop().unwrap();
-    wait_for(&events, |e| *e == Event::Ended(Ending::Stopped));
-    thread::sleep(Duration::from_millis(300));
+    wait_for(&events, |e| *e == Event::Ended(open, Ending::Stopped));
+    thread::sleep(SETTLE);
     while events.try_recv().is_ok() {}
     let (player_stopped, mpv_stopped) = watch(mpv);
     eprintln!(

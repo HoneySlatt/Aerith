@@ -7,37 +7,46 @@
 use std::time::{Duration, Instant};
 
 /// Something that happened in the player. Events come in the order the engine reported them.
+/// Those about a source carry the [`OpenId`] that `Player::open` returned for it, so that
+/// an event of a source already replaced is told apart.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// The source opened and its first frame is shown (or, for a source without picture, its sound
     /// starts). It may start paused, if the player was paused.
-    Started,
+    Started(OpenId),
     /// The player was paused (`true`) or plays again (`false`).
     Paused(bool),
-    /// Where playback stands. Sent when the relation between the position and time changes: after
-    /// the start, after a seek, when playback stops or starts running; not while it runs, so that a
-    /// playing player wakes nothing up. [`Clock::position_at`] gives the position at any moment.
-    Clock(Clock),
-    /// What the engine decodes and outputs, as it reports it. Sent once the source started, then at
-    /// each change (a decoder that falls back to software, a new sound format, a track that ends
-    /// before the others).
-    Report(Box<Report>),
+    /// Where playback of the source stands. Sent when the relation between the position and time
+    /// changes: after the start, after a seek, when playback stops or starts running; not while it
+    /// runs, so that a playing player wakes nothing up. [`Clock::position_at`] gives the position
+    /// at any moment.
+    Clock(OpenId, Clock),
+    /// What the engine decodes and outputs for the source, as it reports it. Sent once the source
+    /// started, then at each change (a decoder that falls back to software, a new sound format, a
+    /// track that ends before the others).
+    Report(OpenId, Box<Report>),
     /// The source has a picture the engine could not show, because its video output failed (no
     /// GPU, no Wayland session); it plays on without it.
-    PictureFailed,
-    /// The source stopped playing.
-    Ended(Ending),
+    PictureFailed(OpenId),
+    /// The source stopped playing, or will never start: it failed, or a later open replaced it.
+    Ended(OpenId, Ending),
     /// The engine refused a command; playback goes on as before.
     Refused {
-        /// The command: `open`, `play`, `pause`, `seek` or `stop`.
+        /// The command: `play`, `pause`, `seek` or `stop`. An open that fails ends instead.
         command: &'static str,
         /// The engine's reason, in its words.
         reason: String,
     },
     /// The engine stopped by itself or broke its connection: it crashed, was killed, or quit. The
-    /// player can do nothing more; a new one must be started. Its reason says how the engine ended.
+    /// player can do nothing more, and sends no other event; a new one must be started. Its reason
+    /// says how the engine ended.
     EngineFailed(String),
 }
+
+/// The number of an open, which the events of its source carry. Opens are numbered from 1, in
+/// the order they were made, for the player's life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OpenId(pub(crate) u64);
 
 /// The position of playback at an instant, and whether it advances from there.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,7 +65,8 @@ impl Clock {
     /// engine's own drift against the system clock, until the next [`Event::Clock`].
     pub fn position_at(&self, now: Instant) -> Duration {
         if self.running {
-            self.position + now.saturating_duration_since(self.at)
+            self.position
+                .saturating_add(now.saturating_duration_since(self.at))
         } else {
             self.position
         }
@@ -144,6 +154,20 @@ pub struct AudioFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_huge_position_saturates_rather_than_panics() {
+        let at = Instant::now();
+        let clock = Clock {
+            position: Duration::MAX,
+            at,
+            running: true,
+        };
+        assert_eq!(
+            clock.position_at(at + Duration::from_secs(3600)),
+            Duration::MAX
+        );
+    }
 
     #[test]
     fn a_running_clock_advances_and_a_stopped_one_does_not() {

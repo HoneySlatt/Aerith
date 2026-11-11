@@ -6,8 +6,8 @@
 //!
 //! mpv is the one `AERITH_TEST_MPV` names, which the development shell sets (`flake.nix`). Each
 //! test runs it through bubblewrap, as the bench runs its rivals (ADR-0013): the person's home is
-//! replaced by the test's, the sound devices and the session's runtime folder (its sound server,
-//! its compositor) are out of reach. Each test then checks that mpv wrote nothing in that home.
+//! replaced by the test's; the sound devices and the session's runtime folders (its sound server,
+//! its compositor, its bus) are hidden, and the variables that name them removed. Each test then checks that mpv wrote nothing in that home.
 
 #![allow(
     dead_code,
@@ -73,14 +73,23 @@ impl TestDir {
         if Path::new("/dev/snd").exists() {
             arguments.extend(["--tmpfs".to_owned(), "/dev/snd".to_owned()]);
         }
-        if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
-            arguments.extend(["--tmpfs".to_owned(), runtime]);
+        // The session's runtime folders, where its compositor, sound server and bus listen: all of
+        // /run/user, since an agent's own runtime folder is only a subfolder of the person's.
+        let mut runtime_folders = vec![PathBuf::from("/run/user")];
+        runtime_folders.extend(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from));
+        for folder in runtime_folders {
+            if folder.exists()
+                && (folder == Path::new("/run/user") || !folder.starts_with("/run/user"))
+            {
+                arguments.extend(["--tmpfs".to_owned(), folder.display().to_string()]);
+            }
         }
         for variable in [
             "WAYLAND_DISPLAY",
             "DISPLAY",
             "PIPEWIRE_REMOTE",
             "PULSE_SERVER",
+            "DBUS_SESSION_BUS_ADDRESS",
         ] {
             arguments.extend(["--unsetenv".to_owned(), variable.to_owned()]);
         }

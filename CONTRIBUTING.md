@@ -25,15 +25,16 @@ It holds:
 - mpv, which the player's tests drive, named by `AERITH_TEST_MPV`: the same build as the bench's
   mpv, without its wrapper.
 
-The first entry downloads the toolchain, about 150 MB, and mpv with what it needs, up to 750 MB.
+The first entry downloads the toolchain, about 150 MB, and mpv with what it needs: 752 MiB once
+unpacked, shared in part with the rest.
 
 The bench has a shell of its own, `nix develop .#bench`: the default shell's tools, plus what makes
 the test corpus and the rivals the bench measures ([below](#the-bench)). CI does not load it.
 
 Without Nix, rustup reads `rust-toolchain.toml` and installs the same toolchain; `cargo deny`,
 `lychee`, `bwrap` and mpv are then yours to install, and `AERITH_TEST_MPV` yours to set. CI's
-Windows job works this way; there the player has no engine yet (M1.6), and its tests against mpv do
-not build.
+Windows job works this way; there the player has no engine yet (M1.6): its tests against mpv build
+empty, and only its tests of sources and clocks run.
 
 ## Building and testing
 
@@ -50,10 +51,11 @@ cargo test --workspace
 `cargo test -p aerith-player` runs three kinds of test
 ([ADR-0014](docs/adr/0014-the-player-interface-and-mpvs-connection.md)):
 
-- in `src/`, against a fake mpv: every event, error and limit;
+- in `src/`, against a fake mpv: every event, error and limit, on Linux;
 - in `tests/mpv.rs` and `tests/at_rest.rs`, against the real mpv that `AERITH_TEST_MPV` names, on
-  clips mpv makes itself. Each mpv runs in bubblewrap with a home of the test's own, and no sound
-  device or display in reach; the picture and the sound are discarded. `at_rest` checks that a
+  clips mpv makes itself. Each mpv runs in bubblewrap with a home of the test's own; the sound
+  devices and the session's runtime folders (its compositor, sound server and bus) are hidden; the
+  picture and the sound are discarded. `at_rest` checks that a
   paused or stopped player wakes none of Aerith's threads;
 - in `tests/corpus.rs`, on the whole corpus ([below](#the-corpus)), ignored unless asked for:
 
@@ -63,8 +65,10 @@ AERITH_CORPUS=~/.cache/aerith-bench/corpus cargo test --release -p aerith-player
 ```
 
 It plays every clip, then the bench's clip as a stream, and prints the time to each first frame
-and what mpv reported; then it times the first frame five times from a file and five from a
-stream. Run it at each milestone that touches playback, on an idle machine; its figures go to
+and what mpv reported. Then it times the first frame of the bench's clip, from a file and as a
+stream, through the player and through mpv alone, with mpv's defaults (as the bench runs it) and
+with the player's options; after one run of each to warm the caches, the three alternate, seven
+runs each. The options are written again in the test: keep them in step with `src/mpv.rs`. Run it at each milestone that touches playback, on an idle machine; its figures go to
 [`docs/measurements.md`](docs/measurements.md).
 
 ### Playing a file

@@ -29,8 +29,8 @@
 //! player.open(&Source::file("film.mkv")?)?;
 //! for event in events {
 //!     match event {
-//!         Event::Started => player.pause()?,
-//!         Event::Ended(_) | Event::EngineFailed(_) => break,
+//!         Event::Started(_) => player.pause()?,
+//!         Event::Ended(..) | Event::EngineFailed(_) => break,
 //!         _ => {}
 //!     }
 //! }
@@ -51,7 +51,9 @@ mod mpv;
 mod player;
 mod source;
 
-pub use event::{AudioFormat, AudioReport, Clock, Colour, Ending, Event, Report, VideoReport};
+pub use event::{
+    AudioFormat, AudioReport, Clock, Colour, Ending, Event, OpenId, Report, VideoReport,
+};
 #[cfg(target_os = "linux")]
 pub use player::{Audio, EngineGone, Player, Settings, Video};
 pub use source::{Header, InvalidSource, LONGEST_HEADER, LONGEST_URL, MOST_HEADERS, Source};

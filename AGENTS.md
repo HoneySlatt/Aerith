@@ -10,9 +10,9 @@ macOS, iPhone, Apple TV, Android phones and Android TV, at a desk and on a couch
 be written on uwui, the owner's UI framework, which is not ready yet. It is licensed under MPL-2.0
 ([ADR-0002](docs/adr/0002-mpl-2-0.md)).
 
-Its real state: the design is done; the Cargo workspace and its checks exist (M1.1), with
-`aerith-player`, which holds only its documentation, and the bench, `aerith-bench`, which measures
-the rivals (M1.2). Stage 1, the player on the desktop, is under way.
+Its real state: the design is done; the Cargo workspace and its checks exist (M1.1); the bench,
+`aerith-bench`, measures the rivals (M1.2); `aerith-player` drives mpv on Linux, without a window of
+Aerith's own yet (M1.3). Stage 1, the player on the desktop, is under way.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
 understand it from the repository alone. Documentation is part of every deliverable.

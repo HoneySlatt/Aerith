@@ -9,17 +9,21 @@
 //! AERITH_CORPUS=~/.cache/aerith-bench/corpus cargo test -p aerith-player --test corpus -- --ignored --nocapture
 //! ```
 //!
-//! It prints, for each clip, the time to the first frame and what mpv reported.
+//! It prints, for each clip, the time to the first frame and what mpv reported. A second test
+//! times the first frame through the player against mpv alone.
 
 #![cfg(target_os = "linux")]
 
 mod common;
 
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use aerith_player::{Ending, Event, Header, Player, Report, Source};
+use aerith_player::{Ending, Event, Header, OpenId, Player, Report, Source};
 use common::{ClipServer, TestDir, wait_for};
 
 fn corpus() -> PathBuf {
@@ -82,17 +86,21 @@ fn keep(report: &mut Option<Report>, latest: Report) {
     }
 }
 
-/// Waits for the first event `wanted` accepts, as [`wait_for`] does, keeping the reports that
-/// come in between in `report`.
+/// Waits for the first event `wanted` accepts, as [`wait_for`] does, keeping the reports of `open`
+/// that come in between in `report`.
 fn wait_keeping_reports(
     events: &Receiver<Event>,
+    open: OpenId,
     report: &mut Option<Report>,
     wanted: impl Fn(&Event) -> bool,
 ) -> Event {
     loop {
-        match wait_for(events, |e| wanted(e) || matches!(e, Event::Report(_))) {
-            Event::Report(latest) if !wanted(&Event::Report(latest.clone())) => {
-                keep(report, *latest);
+        let event = wait_for(events, |e| wanted(e) || matches!(e, Event::Report(..)));
+        match event {
+            Event::Report(of, latest) if !wanted(&Event::Report(of, latest.clone())) => {
+                if of == open {
+                    keep(report, *latest);
+                }
             }
             event => return event,
         }
@@ -105,28 +113,36 @@ fn play(player: &Player, events: &Receiver<Event>, source: &Source) -> (Duration
     let mut report = None;
     player.pause().unwrap();
     let opened = Instant::now();
-    player.open(source).unwrap();
-    let first_frame = match wait_keeping_reports(events, &mut report, |e| {
-        matches!(e, Event::Started | Event::Ended(_))
-    }) {
-        Event::Started => opened.elapsed(),
+    let open = player.open(source).unwrap();
+    let first_frame = match wait_keeping_reports(
+        events,
+        open,
+        &mut report,
+        |e| matches!(e, Event::Started(o) | Event::Ended(o, _) if *o == open),
+    ) {
+        Event::Started(_) => opened.elapsed(),
         other => panic!("{source:?} ended before its first frame: {other:?}"),
     };
     // The clocks of the start come first; the next one is the seek's. Some clips' pictures last
     // two frames: the seek stops on the last one, short of 0.2 s.
     std::thread::sleep(Duration::from_millis(200));
     while let Ok(event) = events.try_recv() {
-        if let Event::Report(latest) = event {
+        if let Event::Report(of, latest) = event
+            && of == open
+        {
             keep(&mut report, *latest);
         }
     }
     player.seek(Duration::from_millis(200)).unwrap();
-    let clock = match wait_keeping_reports(events, &mut report, |e| {
-        matches!(e, Event::Clock(_) | Event::Ended(_))
-    }) {
-        Event::Clock(clock) => clock,
+    let clock = match wait_keeping_reports(
+        events,
+        open,
+        &mut report,
+        |e| matches!(e, Event::Clock(o, _) | Event::Ended(o, _) if *o == open),
+    ) {
+        Event::Clock(_, clock) => clock,
         // mpv ends a short MPEG-TS clip when it seeks into it (dv7-1080p): reported as it is.
-        Event::Ended(Ending::Finished) => {
+        Event::Ended(_, Ending::Finished) => {
             eprintln!("{source:?}: ended at the seek");
             return (first_frame, report.unwrap_or_default());
         }
@@ -141,25 +157,24 @@ fn play(player: &Player, events: &Receiver<Event>, source: &Source) -> (Duration
         "{source:?}: {clock:?}"
     );
     player.play().unwrap();
-    wait_keeping_reports(events, &mut report, |e| *e == Event::Paused(false));
-    std::thread::sleep(Duration::from_millis(300));
-    while let Ok(event) = events.try_recv() {
-        match event {
-            Event::Report(latest) => keep(&mut report, *latest),
-            Event::Ended(_) => break,
-            _ => {}
-        }
+    // A clip shorter than its seek's position plus a moment ends as it plays.
+    if let Event::Ended(_, ending) = wait_keeping_reports(events, open, &mut report, |e| {
+        *e == Event::Paused(false) || matches!(e, Event::Ended(o, _) if *o == open)
+    }) {
+        assert_eq!(ending, Ending::Finished, "{source:?}");
+        return (first_frame, report.unwrap_or_default());
     }
+    std::thread::sleep(Duration::from_millis(300));
     player.stop().unwrap();
-    // A clip shorter than the wait has ended by itself, and its stop ends nothing.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while let Ok(event) = events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-        match event {
-            Event::Ended(Ending::Stopped | Ending::Finished) => break,
-            Event::Ended(failed) => panic!("{source:?}: {failed:?}"),
-            Event::EngineFailed(reason) => panic!("the engine failed: {reason}"),
-            _ => {}
-        }
+    // A clip shorter than the wait has ended by itself, and its stop ends nothing more.
+    match wait_keeping_reports(
+        events,
+        open,
+        &mut report,
+        |e| matches!(e, Event::Ended(o, _) if *o == open),
+    ) {
+        Event::Ended(_, Ending::Stopped | Ending::Finished) => {}
+        other => panic!("{source:?}: {other:?}"),
     }
     (first_frame, report.unwrap_or_default())
 }
@@ -204,42 +219,168 @@ fn every_clip_of_the_corpus_opens_seeks_plays_and_stops() {
     dir.assert_home_untouched(&[&corpus]);
 }
 
-/// The time from `open` to the first frame, as the bench times mpv alone (ADR-0013): the player
-/// started and idle beforehand, the bench's clip from a file and from HTTP on 127.0.0.1, the
-/// picture and the sound discarded. Run alone (`--test-threads=1`) on an idle machine.
+/// The options `src/mpv.rs` gives mpv, but its IPC and its caches, written again here: the
+/// player keeps them private. Keep the two lists in step.
+const PLAYER_OPTIONS: [&str; 19] = [
+    "--resume-playback=no",
+    "--save-position-on-quit=no",
+    "--load-scripts=no",
+    "--osc=no",
+    "--ytdl=no",
+    "--load-stats-overlay=no",
+    "--load-console=no",
+    "--load-auto-profiles=no",
+    "--load-select=no",
+    "--load-positioning=no",
+    "--load-commands=no",
+    "--load-context-menu=no",
+    "--input-default-bindings=no",
+    "--input-builtin-bindings=no",
+    "--input-builtin-dragging=no",
+    "--input-builtin-drag-and-drop=no",
+    "--input-vo-keyboard=no",
+    "--input-media-keys=no",
+    "--title=Aerith",
+];
+
+/// mpv alone, driven as the bench drives it: `--no-config`, the same discarded outputs, its IPC
+/// on a socket file, timed from `loadfile` to `playback-restart` over one connection.
+struct MpvAlone {
+    child: Child,
+    writer: UnixStream,
+    reader: BufReader<UnixStream>,
+}
+
+impl MpvAlone {
+    /// Starts mpv in `dir`'s sandbox, with `options` beyond the bench's.
+    fn start(dir: &TestDir, corpus: &Path, options: &[&str]) -> Self {
+        let socket = dir.root.join("alone.sock");
+        let child = Command::new(dir.mpv(&[corpus]))
+            .args([
+                "--no-config",
+                "--idle=yes",
+                "--terminal=no",
+                "--vo=null",
+                "--ao=null",
+            ])
+            .args(options)
+            .arg(format!("--input-ipc-server={}", socket.display()))
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + common::WAIT;
+        let stream = loop {
+            match UnixStream::connect(&socket) {
+                Ok(stream) => break stream,
+                Err(error) => {
+                    assert!(Instant::now() < deadline, "mpv's socket: {error}");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        };
+        Self {
+            writer: stream.try_clone().unwrap(),
+            reader: BufReader::new(stream),
+            child,
+        }
+    }
+
+    /// Sends `command`, then reads mpv's messages until one names `event`.
+    fn until(&mut self, command: &str, event: &str) {
+        writeln!(self.writer, "{command}").unwrap();
+        let marker = format!("\"event\":\"{event}\"");
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert!(self.reader.read_line(&mut line).unwrap() > 0, "mpv ended");
+            if line.contains(&marker) {
+                return;
+            }
+        }
+    }
+
+    /// The time from `loadfile` to the first frame of `target`; then stops it.
+    fn first_frame(&mut self, target: &str) -> Duration {
+        let opened = Instant::now();
+        let load = serde_json::json!({"command": ["loadfile", target]}).to_string();
+        self.until(&load, "playback-restart");
+        let time = opened.elapsed();
+        self.until(r#"{"command": ["stop"]}"#, "end-file");
+        time
+    }
+}
+
+impl Drop for MpvAlone {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The time from `open` to the first frame, against mpv alone driven the same way (ADR-0013),
+/// with its own defaults as the bench runs it, and with the player's options: their difference is
+/// mpv's, the rest the player's. Each is started and idle beforehand; the bench's clip comes from
+/// a file and from HTTP on 127.0.0.1, the picture and the sound discarded. A first run of each is
+/// left out, as it warms the caches; then the three alternate, run by run. Run alone
+/// (`--test-threads=1`) on an idle machine.
 #[test]
 #[ignore = "a measure on the corpus: AERITH_CORPUS=<folder> cargo test --release -p aerith-player --test corpus -- --ignored --test-threads=1 --nocapture"]
 fn time_to_the_first_frame() {
-    const RUNS: usize = 5;
+    const RUNS: usize = 7;
     let corpus = corpus();
     let clip = corpus.join("hdr10-2160p-hevc10-eac3.mkv");
     let server = ClipServer::start(clip.clone());
     let dir = TestDir::new("first-frame");
+    // Each mpv alone has a home of its own: with its defaults, its scripts write a font cache.
+    let (defaults_dir, options_dir) = (TestDir::new("alone"), TestDir::new("alone-options"));
     let (player, events) = Player::start(&dir.settings(&[&corpus])).unwrap();
+    let mut defaults = MpvAlone::start(&defaults_dir, &corpus, &[]);
+    let mut with_options = MpvAlone::start(&options_dir, &corpus, &PLAYER_OPTIONS);
     std::thread::sleep(Duration::from_secs(1));
-    for (from, source) in [
-        ("file", Source::file(&clip).unwrap()),
-        ("stream", Source::stream(server.url(""), vec![]).unwrap()),
-    ] {
-        let mut times: Vec<f64> = (0..RUNS)
-            .map(|_| {
-                let opened = Instant::now();
-                player.open(&source).unwrap();
-                wait_for(&events, |e| *e == Event::Started);
-                let time = opened.elapsed().as_secs_f64() * 1000.0;
-                player.stop().unwrap();
-                wait_for(&events, |e| matches!(e, Event::Ended(_)));
-                time
-            })
-            .collect();
-        let shown: Vec<String> = times.iter().map(|t| format!("{t:.0}")).collect();
-        times.sort_by(f64::total_cmp);
-        eprintln!(
-            "{from}: {} ms, median {:.0} ms",
+    let through_player = |source: &Source| -> Duration {
+        let opened = Instant::now();
+        let open = player.open(source).unwrap();
+        wait_for(&events, |e| *e == Event::Started(open));
+        let time = opened.elapsed();
+        player.stop().unwrap();
+        wait_for(&events, |e| matches!(e, Event::Ended(o, _) if *o == open));
+        time
+    };
+    let summary = |times: &[Duration]| -> String {
+        let mut sorted: Vec<f64> = times.iter().map(|t| t.as_secs_f64() * 1000.0).collect();
+        let shown: Vec<String> = sorted.iter().map(|t| format!("{t:.0}")).collect();
+        sorted.sort_by(f64::total_cmp);
+        format!(
+            "{} ms, median {:.0} ms",
             shown.join(", "),
-            times[RUNS / 2]
+            sorted[sorted.len() / 2]
+        )
+    };
+    for (from, target) in [
+        ("file", clip.display().to_string()),
+        ("stream", server.url("")),
+    ] {
+        let source = if from == "file" {
+            Source::file(&clip).unwrap()
+        } else {
+            Source::stream(target.clone(), vec![]).unwrap()
+        };
+        through_player(&source);
+        defaults.first_frame(&target);
+        with_options.first_frame(&target);
+        let mut times: [Vec<Duration>; 3] = Default::default();
+        for _ in 0..RUNS {
+            times[0].push(through_player(&source));
+            times[1].push(defaults.first_frame(&target));
+            times[2].push(with_options.first_frame(&target));
+        }
+        eprintln!("{from}, through the player: {}", summary(&times[0]));
+        eprintln!("{from}, mpv alone, its defaults: {}", summary(&times[1]));
+        eprintln!(
+            "{from}, mpv alone, the player's options: {}",
+            summary(&times[2])
         );
     }
-    drop(player);
+    drop((defaults, with_options, player));
     dir.assert_home_untouched(&[&corpus]);
+    options_dir.assert_home_untouched(&[&corpus]);
 }

@@ -20,12 +20,17 @@
 //! change, never at a fixed rate. The position is not observed, since it changes at every frame:
 //! it is read when its relation to time changes, and sent as a [`Clock`].
 //!
+//! **Each open is numbered**, and mpv numbers the playlist entry each load makes: the events of a
+//! source carry the number of the open it came from, and each open ends with exactly one `Ended`,
+//! even when a later open replaces it before it loads.
+//!
 //! **Secrets.** A stream's URL and headers travel over the connection only, never on mpv's command
-//! line, and mpv writes no log.
+//! line, in its title or in a log; the headers are options of their own load, which no other
+//! source carries.
 //!
 //! [ADR-0003]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0003-mpv-in-its-own-process.md
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
@@ -33,15 +38,18 @@ use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command as Process, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::event::{AudioFormat, AudioReport, Clock, Colour, Ending, Event, Report, VideoReport};
+use crate::event::{
+    AudioFormat, AudioReport, Clock, Colour, Ending, Event, OpenId, Report, VideoReport,
+};
 use crate::player::{Audio, Command, EngineGone, Settings, Video};
-use crate::source::Kind;
+use crate::source::{Header, Kind, Source};
 
 /// The largest message accepted from mpv, in bytes. Its messages are a few hundred bytes; a larger
 /// one is a fault, not something to buffer.
@@ -49,14 +57,8 @@ const LARGEST_MESSAGE: u64 = 1 << 20;
 /// How long mpv may take to exit once asked, or once its connection broke, before it is killed.
 const GRACE: Duration = Duration::from_secs(2);
 
-/// The properties whose changes mpv sends: the pause, whether the clock runs, the tracks and the
-/// one selected (mpv drops the picture when its video output fails), and what the report is built
-/// from.
-const OBSERVED: [&str; 13] = [
-    "pause",
-    "core-idle",
-    "track-list",
-    "vid",
+/// The properties the report is made of.
+const REPORTED: [&str; 9] = [
     "video-format",
     "hwdec-current",
     "video-params",
@@ -66,6 +68,25 @@ const OBSERVED: [&str; 13] = [
     "audio-params",
     "current-ao",
     "audio-out-params",
+];
+
+/// The properties whose changes mpv sends: the pause, whether the clock runs, the tracks (mpv
+/// deselects the picture when its video output fails), and the report's. mpv does not always send
+/// the report's again for a new source: they are also read at each source's first frame
+/// ([`Session::read_report`]).
+const OBSERVED: [&str; 12] = [
+    "pause",
+    "core-idle",
+    "track-list",
+    REPORTED[0],
+    REPORTED[1],
+    REPORTED[2],
+    REPORTED[3],
+    REPORTED[4],
+    REPORTED[5],
+    REPORTED[6],
+    REPORTED[7],
+    REPORTED[8],
 ];
 
 /// mpv's command line: no configuration, script or key binding of the person's or of mpv's own,
@@ -98,6 +119,9 @@ fn arguments(settings: &Settings) -> Vec<OsString> {
         "--input-ipc-client=fd://0",
         // Stays started between sources.
         "--idle=yes",
+        // mpv's default title holds the media's name, and a stream's is its URL, token included:
+        // its window and its sound stream show this instead.
+        "--title=Aerith",
     ]
     .map(OsString::from)
     .to_vec();
@@ -143,6 +167,8 @@ enum Message {
 /// The running engine, as the player holds it.
 pub(crate) struct Engine {
     inbox: Sender<Message>,
+    /// The number of the last open.
+    opens: AtomicU64,
     /// Our end of the connection, to close it on drop even if the engine thread is stuck writing.
     connection: UnixStream,
     /// The engine thread, which returns how mpv ended.
@@ -153,8 +179,12 @@ impl Engine {
     /// Starts mpv as `settings` say and the threads that drive it.
     pub(crate) fn start(settings: &Settings) -> io::Result<(Self, Receiver<Event>)> {
         let (ours, theirs) = UnixStream::pair()?;
+        // The GPU driver's own shader caches go to Aerith's folder too, not the person's home.
+        let driver_cache = settings.cache.join("driver");
         let child = Process::new(&settings.engine)
             .args(arguments(settings))
+            .env("MESA_SHADER_CACHE_DIR", &driver_cache)
+            .env("__GL_SHADER_DISK_CACHE_PATH", &driver_cache)
             .stdin(Stdio::from(OwnedFd::from(theirs)))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -203,11 +233,18 @@ impl Engine {
         Ok((
             Self {
                 inbox,
+                opens: AtomicU64::new(0),
                 connection,
                 thread: Some(thread),
             },
             receiver,
         ))
+    }
+
+    /// Sends the open of `source`, numbered after the last one.
+    pub(crate) fn open(&self, source: Source) -> Result<OpenId, EngineGone> {
+        let open = OpenId(self.opens.fetch_add(1, Ordering::Relaxed) + 1);
+        self.send(Command::Open(open, source)).map(|()| open)
     }
 
     pub(crate) fn send(&self, command: Command) -> Result<(), EngineGone> {
@@ -281,10 +318,18 @@ fn parse(line: &[u8]) -> serde_json::Result<Value> {
 enum Pending {
     /// A command of the player's, by its name in [`Event::Refused`].
     Command(&'static str),
-    /// The position, for a [`Clock`].
-    Position,
-    /// The setup, which mpv does not refuse.
-    Setup,
+    /// The load of an open, which answers with mpv's number for it.
+    Load(OpenId),
+    /// The position, for a [`Clock`] of this open.
+    Position(OpenId),
+    /// A property of the report, read for this open; the last of a reading sends the report.
+    Property {
+        open: OpenId,
+        name: &'static str,
+        last: bool,
+    },
+    /// An answer nothing depends on: the setup, a stop.
+    Ignored,
 }
 
 /// The engine thread's state.
@@ -293,6 +338,12 @@ struct Session {
     events: Sender<Event>,
     next_id: u64,
     pending: HashMap<u64, Pending>,
+    /// Each open by mpv's number for its playlist entry, once mpv answered its load.
+    entries: HashMap<u64, OpenId>,
+    /// The opens sent that have neither started loading nor ended.
+    waiting: BTreeSet<OpenId>,
+    /// The open mpv is loading or playing, if mpv's entry is one of Aerith's.
+    current: Option<OpenId>,
     /// Whether the current source has shown its first frame.
     started: bool,
     /// mpv's pause, once it said it.
@@ -301,8 +352,8 @@ struct Session {
     clock: Option<Clock>,
     /// Whether mpv's playback is stopped: paused, seeking, waiting for data or idle.
     core_idle: bool,
-    /// The observed properties' last values, by name.
-    properties: HashMap<String, Value>,
+    /// The values of [`REPORTED`] and `track-list` for the current source, by name.
+    properties: HashMap<&'static str, Value>,
     /// The report last sent for the current source.
     report: Option<Report>,
     /// Whether the current source's lost picture was reported.
@@ -316,6 +367,9 @@ impl Session {
             events,
             next_id: 1,
             pending: HashMap::new(),
+            entries: HashMap::new(),
+            waiting: BTreeSet::new(),
+            current: None,
             started: false,
             paused: None,
             clock: None,
@@ -334,7 +388,7 @@ impl Session {
         reader: JoinHandle<()>,
     ) -> String {
         for (id, name) in (1..).zip(OBSERVED) {
-            self.request(Pending::Setup, json!(["observe_property", id, name]));
+            self.request(Pending::Ignored, json!(["observe_property", id, name]));
         }
         let ended = loop {
             let Ok(message) = messages.recv() else {
@@ -345,7 +399,9 @@ impl Session {
                 Message::Command(command) => self.command(command),
                 Message::Received(value) => self.received(&value),
                 Message::Disconnected(reason) => {
-                    // A connection that broke while mpv runs leaves mpv without orders: end it.
+                    // mpv quits at the end of its connection: close it before waiting, so that an
+                    // mpv that still runs is not kept waiting the whole grace.
+                    let _ = self.connection.shutdown(Shutdown::Both);
                     let ended = reap(child);
                     self.emit(Event::EngineFailed(format!("{reason}; mpv {ended}")));
                     break ended;
@@ -365,28 +421,45 @@ impl Session {
     fn command(&mut self, command: Command) {
         let pending = |name| Pending::Command(name);
         match command {
-            Command::Open(source) => {
+            Command::Open(open, source) => {
                 let (target, headers) = match source.kind() {
                     Kind::File(path) => (path.clone(), Vec::new()),
-                    Kind::Stream { url, headers } => {
-                        (url.clone(), headers.iter().map(|h| h.line()).collect())
-                    }
+                    Kind::Stream { url, headers } => (url.clone(), headers.clone()),
                 };
-                // Set before each load, emptied for a source without headers: the option outlives
-                // the source it was set for.
+                if headers.iter().any(|header| header.line().contains('\\')) {
+                    self.emit(Event::Ended(
+                        open,
+                        Ending::Failed(
+                            "a header holds a backslash, which mpv's list of headers cannot carry"
+                                .to_owned(),
+                        ),
+                    ));
+                    return;
+                }
+                // The headers are options of this load only: mpv sets them for its file and
+                // restores them after, so that no other source ever carries them.
+                let mut options = serde_json::Map::new();
+                if !headers.is_empty() {
+                    options.insert(
+                        "http-header-fields".to_owned(),
+                        Value::from(header_list(&headers)),
+                    );
+                }
+                self.waiting.insert(open);
                 self.request(
-                    pending("open"),
-                    json!(["set_property", "http-header-fields", headers]),
+                    Pending::Load(open),
+                    json!({"name": "loadfile", "url": target, "flags": "replace", "index": -1,
+                           "options": options}),
                 );
-                self.request(pending("open"), json!(["loadfile", target]));
             }
             Command::Play => self.request(pending("play"), json!(["set_property", "pause", false])),
             Command::Pause => {
                 self.request(pending("pause"), json!(["set_property", "pause", true]))
             }
+            // `exact`, rather than mpv's default precision, which its manual says may change.
             Command::Seek(position) => self.request(
                 pending("seek"),
-                json!(["seek", position.as_secs_f64(), "absolute"]),
+                json!(["seek", position.as_secs_f64(), "absolute+exact"]),
             ),
             Command::Stop => self.request(pending("stop"), json!(["stop"])),
         }
@@ -404,15 +477,41 @@ impl Session {
         }
     }
 
-    /// Asks for the position, for a [`Clock`], unless a question is already on its way: its
-    /// answer comes after the change that prompted this one, and is read with the state then.
+    /// Asks for the current source's position, for a [`Clock`], unless a question is already on
+    /// its way: its answer comes after the change that prompted this one, and is read with the
+    /// state then.
     fn ask_position(&mut self) {
+        let Some(open) = self.current.filter(|_| self.started) else {
+            return;
+        };
         if !self
             .pending
             .values()
-            .any(|p| matches!(p, Pending::Position))
+            .any(|p| matches!(p, Pending::Position(_)))
         {
-            self.request(Pending::Position, json!(["get_property", "time-pos"]));
+            self.request(Pending::Position(open), json!(["get_property", "time-pos"]));
+        }
+    }
+
+    /// Reads every property the report and the picture's check are made of. mpv does not send
+    /// all of them again to an observer when one source replaces another of the same format, so
+    /// the report of a source is never built from what was observed for the last one.
+    fn read_report(&mut self) {
+        let Some(open) = self.current else { return };
+        if self
+            .pending
+            .values()
+            .any(|p| matches!(p, Pending::Property { .. }))
+        {
+            return;
+        }
+        let names: Vec<&'static str> = REPORTED.into_iter().chain(["track-list"]).collect();
+        for (index, name) in names.iter().enumerate() {
+            let last = index + 1 == names.len();
+            self.request(
+                Pending::Property { open, name, last },
+                json!(["get_property", name]),
+            );
         }
     }
 
@@ -431,38 +530,72 @@ impl Session {
 
     fn answer(&mut self, id: u64, answer: &Value) {
         let success = answer["error"] == "success";
+        let error = || {
+            answer["error"]
+                .as_str()
+                .unwrap_or("no reason given")
+                .to_owned()
+        };
         match self.pending.remove(&id) {
             Some(Pending::Command(command)) if !success => self.emit(Event::Refused {
                 command,
-                reason: answer["error"]
-                    .as_str()
-                    .unwrap_or("no reason given")
-                    .to_owned(),
+                reason: error(),
             }),
-            Some(Pending::Position) if success => {
-                if let Some(seconds) = answer["data"].as_f64() {
-                    let clock = Clock {
-                        position: Duration::try_from_secs_f64(seconds.max(0.0)).unwrap_or_default(),
-                        at: Instant::now(),
-                        running: !self.core_idle,
-                    };
-                    // A stopped clock at the same position says nothing new (a seek's restart
-                    // after the change that stopped the clock).
-                    let repeated = self.clock.is_some_and(|last| {
-                        !last.running && !clock.running && last.position == clock.position
-                    });
-                    self.clock = Some(clock);
-                    if !repeated {
-                        self.emit(Event::Clock(clock));
+            Some(Pending::Load(open)) => {
+                let entry = answer["data"]["playlist_entry_id"].as_u64();
+                match entry.filter(|_| success) {
+                    Some(entry) => {
+                        self.entries.insert(entry, open);
+                    }
+                    None => {
+                        if self.waiting.remove(&open) {
+                            self.emit(Event::Ended(open, Ending::Failed(error())));
+                        }
                     }
                 }
             }
-            // A position mpv no longer has (the source ended in between) needs no clock.
+            Some(Pending::Position(open)) if success && self.current == Some(open) => {
+                if let Some(seconds) = answer["data"].as_f64() {
+                    self.clock_read(open, seconds);
+                }
+            }
+            Some(Pending::Property { open, name, last }) if self.current == Some(open) => {
+                // An error is a property mpv does not have now: no such track.
+                let value = if success {
+                    answer["data"].clone()
+                } else {
+                    Value::Null
+                };
+                self.properties.insert(name, value);
+                if last {
+                    self.send_report();
+                    self.check_picture();
+                }
+            }
+            // An answer for a source that has ended, or one nothing depends on.
             _ => {}
         }
     }
 
+    /// Sends the clock read at `seconds` for `open`, unless it says nothing new: a stopped clock
+    /// at the same position (a seek's restart after the change that stopped the clock).
+    fn clock_read(&mut self, open: OpenId, seconds: f64) {
+        let clock = Clock {
+            position: Duration::try_from_secs_f64(seconds.max(0.0)).unwrap_or_default(),
+            at: Instant::now(),
+            running: !self.core_idle,
+        };
+        let repeated = self
+            .clock
+            .is_some_and(|last| !last.running && !clock.running && last.position == clock.position);
+        self.clock = Some(clock);
+        if !repeated {
+            self.emit(Event::Clock(open, clock));
+        }
+    }
+
     fn event(&mut self, event: &str, message: &Value) {
+        let entry = message["playlist_entry_id"].as_u64();
         match event {
             "property-change" => {
                 let name = message["name"].as_str().unwrap_or_default();
@@ -470,24 +603,43 @@ impl Session {
                 self.property(name, data);
             }
             "start-file" => {
-                // Each source gets its own report and clock, even ones the same as the last
-                // source's.
+                // An entry that is not one of Aerith's opens (a playlist's) plays as no source:
+                // its events are not sent.
+                self.current = entry.and_then(|entry| self.entries.get(&entry).copied());
+                if let Some(open) = self.current {
+                    self.waiting.remove(&open);
+                    self.end_superseded(open);
+                }
+                // Each source gets its own report, clock and check, even ones the same as the
+                // last source's.
                 self.started = false;
                 self.report = None;
                 self.clock = None;
                 self.picture_failed = false;
+                self.properties.clear();
             }
             "playback-restart" => {
-                if !self.started {
+                if let Some(open) = self.current.filter(|_| !self.started) {
                     self.started = true;
-                    self.emit(Event::Started);
-                    self.send_report();
-                    self.check_picture();
+                    self.emit(Event::Started(open));
+                    self.read_report();
                 }
                 self.ask_position();
             }
+            "audio-reconfig" | "video-reconfig" if self.started => self.read_report(),
             "end-file" => {
-                self.started = false;
+                let Some(open) = entry.and_then(|entry| self.entries.remove(&entry)) else {
+                    return;
+                };
+                self.end_superseded(open);
+                let was_current = self.current == Some(open);
+                if was_current {
+                    self.current = None;
+                    self.started = false;
+                }
+                if !(self.waiting.remove(&open) || was_current) {
+                    return;
+                }
                 let ending = match message["reason"].as_str() {
                     Some("eof") => Ending::Finished,
                     Some("stop" | "quit") => Ending::Stopped,
@@ -497,13 +649,27 @@ impl Session {
                             .unwrap_or("unknown error")
                             .to_owned(),
                     ),
-                    // A playlist replaced by its entries, which play next.
-                    Some("redirect") => return,
+                    Some("redirect") => {
+                        // A playlist, which mpv would replace by its entries, without the
+                        // source's headers: the player plays one media an open.
+                        self.request(Pending::Ignored, json!(["stop"]));
+                        Ending::Failed("the source is a playlist".to_owned())
+                    }
                     other => Ending::Failed(format!("ended for an unknown reason: {other:?}")),
                 };
-                self.emit(Event::Ended(ending));
+                self.emit(Event::Ended(open, ending));
             }
             _ => {}
+        }
+    }
+
+    /// Ends the opens sent before `open` that never started loading: mpv dropped them when a
+    /// later one replaced them, and says nothing of them.
+    fn end_superseded(&mut self, open: OpenId) {
+        let earlier: Vec<OpenId> = self.waiting.range(..open).copied().collect();
+        for dropped in earlier {
+            self.waiting.remove(&dropped);
+            self.emit(Event::Ended(dropped, Ending::Stopped));
         }
     }
 
@@ -524,19 +690,21 @@ impl Session {
                 let Some(idle) = data.as_bool() else { return };
                 let changed = self.core_idle != idle;
                 self.core_idle = idle;
-                if changed && self.started {
+                if changed {
                     self.ask_position();
                 }
             }
-            "track-list" | "vid" => {
-                self.properties.insert(name.to_owned(), data);
+            "track-list" => {
+                self.properties.insert("track-list", data);
                 self.check_picture();
             }
             _ => {
-                self.properties.insert(name.to_owned(), data);
-                if self.started {
-                    self.send_report();
-                }
+                // Only the names asked for are kept: the map stays bounded.
+                let Some(name) = REPORTED.into_iter().find(|reported| *reported == name) else {
+                    return;
+                };
+                self.properties.insert(name, data);
+                self.send_report();
             }
         }
     }
@@ -544,38 +712,49 @@ impl Session {
     /// Reports, once a source, a picture that does not play: mpv deselects the video track when
     /// its video output fails, and plays the sound alone. Aerith never deselects it itself.
     fn check_picture(&mut self) {
-        if !self.started || self.picture_failed {
+        let Some(open) = self
+            .current
+            .filter(|_| self.started && !self.picture_failed)
+        else {
             return;
-        }
-        let has_picture = self
-            .properties
-            .get("track-list")
-            .and_then(Value::as_array)
-            .is_some_and(|tracks| tracks.iter().any(|track| track["type"] == "video"));
-        let selected = self
-            .properties
-            .get("vid")
-            .is_some_and(|vid| *vid != false && *vid != "no");
-        if has_picture && !selected {
+        };
+        let Some(tracks) = self.properties.get("track-list").and_then(Value::as_array) else {
+            return;
+        };
+        let pictures: Vec<&Value> = tracks.iter().filter(|t| t["type"] == "video").collect();
+        if !pictures.is_empty() && pictures.iter().all(|t| t["selected"] != true) {
             self.picture_failed = true;
-            self.emit(Event::PictureFailed);
+            self.emit(Event::PictureFailed(open));
         }
     }
 
     /// Sends the report if it changed since the last one sent. A report of no track at all is not
-    /// sent: mpv clears its properties as a source ends, and fills them as it starts, in any order
-    /// against the events that say so.
+    /// sent: mpv clears its properties as a source ends.
     fn send_report(&mut self) {
+        let Some(open) = self.current.filter(|_| self.started) else {
+            return;
+        };
         let report = report(&self.properties);
         if report != Report::default() && self.report.as_ref() != Some(&report) {
             self.report = Some(report.clone());
-            self.emit(Event::Report(Box::new(report)));
+            self.emit(Event::Report(open, Box::new(report)));
         }
     }
 }
 
-/// The report, from the observed properties' values.
-fn report(properties: &HashMap<String, Value>) -> Report {
+/// The headers as mpv's list option reads them: one `Name: value` an item, items separated by
+/// commas, a comma inside an item escaped by a backslash. mpv reads no escape for a backslash
+/// itself, so a header that holds one is refused before ([`Session::command`]).
+fn header_list(headers: &[Header]) -> String {
+    headers
+        .iter()
+        .map(|header| header.line().replace(',', "\\,"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The report, from the properties' values.
+fn report(properties: &HashMap<&'static str, Value>) -> Report {
     let text = |name: &str| properties.get(name).and_then(Value::as_str);
     let colour = |params: &Value| -> Option<Colour> {
         Some(Colour {
@@ -685,12 +864,39 @@ mod tests {
             command
         }
 
+        /// Answers the next command, a load, with mpv's number for its entry, and returns it.
+        fn load(&mut self, entry: u64) -> Value {
+            let command = self.command();
+            assert_eq!(command["command"]["name"], "loadfile", "{command}");
+            self.answer(&command, "success", json!({"playlist_entry_id": entry}));
+            command
+        }
+
         fn send(&mut self, value: Value) {
             writeln!(self.writer, "{value}").unwrap();
         }
 
         fn property(&mut self, name: &str, data: Value) {
             self.send(json!({"event": "property-change", "id": 1, "name": name, "data": data}));
+        }
+
+        /// Answers the reading of the report's properties with `values`, and null for the others.
+        fn report_read(&mut self, values: &Value) {
+            for name in REPORTED.into_iter().chain(["track-list"]) {
+                let question = self.command();
+                assert_eq!(question["command"], json!(["get_property", name]));
+                match values.get(name) {
+                    Some(value) => self.answer(&question, "success", value.clone()),
+                    None => self.answer(&question, "property unavailable", Value::Null),
+                }
+            }
+        }
+
+        /// Answers the question for the position with `seconds`.
+        fn position(&mut self, seconds: f64) {
+            let question = self.command();
+            assert_eq!(question["command"], json!(["get_property", "time-pos"]));
+            self.answer(&question, "success", json!(seconds));
         }
     }
 
@@ -726,23 +932,56 @@ mod tests {
         events.recv_timeout(WAIT).expect("an event in time")
     }
 
+    /// Fails on any event within a moment. An absence is proven only as far as this wait goes.
     fn quiet(events: &Receiver<Event>) {
-        if let Ok(event) = events.recv_timeout(Duration::from_millis(100)) {
+        if let Ok(event) = events.recv_timeout(Duration::from_millis(300)) {
             panic!("no event expected, got {event:?}");
         }
     }
 
-    /// Brings the fake to a started source, playing.
-    fn start(mpv: &mut FakeMpv, events: &Receiver<Event>) {
-        mpv.property("pause", json!(false));
-        mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
+    fn file(path: &str) -> Source {
+        Source::file(path).unwrap()
+    }
+
+    /// Opens a file, loads it as mpv's entry `entry`, and brings it to its first frame, playing,
+    /// with `report` as mpv's properties. Returns the open's number.
+    fn start(
+        engine: &Engine,
+        mpv: &mut FakeMpv,
+        events: &Receiver<Event>,
+        entry: u64,
+        report: &Value,
+    ) -> OpenId {
+        let open = engine.open(file("/corpus/clip.mkv")).unwrap();
+        mpv.load(entry);
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": entry}));
         mpv.property("core-idle", json!(false));
         mpv.send(json!({"event": "playback-restart"}));
-        assert_eq!(next(events), Event::Started);
-        let question = mpv.command();
-        assert_eq!(question["command"], json!(["get_property", "time-pos"]));
-        mpv.answer(&question, "success", json!(0.0));
-        assert!(matches!(next(events), Event::Clock(_)));
+        assert_eq!(next(events), Event::Started(open));
+        mpv.report_read(report);
+        // A report needs a track: a picture's or a sound's parameters.
+        if report.get("video-params").is_some() || report.get("audio-params").is_some() {
+            assert!(matches!(next(events), Event::Report(o, _) if o == open));
+        }
+        mpv.position(0.0);
+        assert!(matches!(next(events), Event::Clock(o, c) if o == open && c.running));
+        open
+    }
+
+    /// mpv's properties for a 4K HDR10 picture on hardware and a TrueHD sound.
+    fn hdr_report() -> Value {
+        json!({
+            "video-format": "hevc",
+            "hwdec-current": "vaapi",
+            "video-params": {"w": 3840, "h": 2160, "primaries": "bt.2020", "gamma": "pq",
+                             "sig-peak": 4.926},
+            "current-vo": "gpu-next",
+            "video-target-params": {"primaries": "bt.709", "gamma": "gamma2.2", "sig-peak": 0.0},
+            "audio-codec-name": "truehd",
+            "audio-params": {"format": "s32", "samplerate": 48000, "channels": "7.1"},
+            "current-ao": "pipewire",
+            "track-list": [{"type": "video", "selected": true}, {"type": "audio", "selected": true}],
+        })
     }
 
     fn settings(video: Video, audio: Audio) -> Settings {
@@ -768,6 +1007,7 @@ mod tests {
                 "--terminal=no",
                 "--input-ipc-client=fd://0",
                 "--ao=null",
+                "--title=Aerith",
                 "--gpu-shader-cache-dir=/cache/aerith/shaders",
             ] {
                 assert!(arguments.iter().any(|a| a == expected), "{expected}");
@@ -791,61 +1031,81 @@ mod tests {
     }
 
     #[test]
-    fn a_file_opens_without_headers_and_its_first_frame_starts_the_clock() {
+    fn headers_are_listed_as_mpv_reads_them() {
+        let headers = [
+            Header::new("Authorization", "Bearer a, b").unwrap(),
+            Header::new("Referer", "https://example.org/").unwrap(),
+        ];
+        assert_eq!(
+            header_list(&headers),
+            r"Authorization: Bearer a\, b,Referer: https://example.org/"
+        );
+    }
+
+    #[test]
+    fn a_header_with_a_backslash_ends_its_open_unloaded() {
+        let (engine, events, _mpv) = driven(exited());
+        let header = Header::new("X-Path", r"C:\x").unwrap();
+        let source = Source::stream("https://example.org/a.mkv", vec![header]).unwrap();
+        let open = engine.open(source).unwrap();
+        assert!(matches!(next(&events), Event::Ended(o, Ending::Failed(_)) if o == open));
+    }
+
+    #[test]
+    fn a_file_loads_without_headers_and_its_first_frame_starts_the_clock() {
         let (engine, events, mut mpv) = driven(exited());
-        engine
-            .send(Command::Open(Source::file("/corpus/clip.mkv").unwrap()))
-            .unwrap();
-        let headers = mpv.accept();
+        let open = engine.open(file("/corpus/clip.mkv")).unwrap();
         assert_eq!(
-            headers["command"],
-            json!(["set_property", "http-header-fields", []])
+            mpv.load(1)["command"],
+            json!({"name": "loadfile", "url": "/corpus/clip.mkv", "flags": "replace",
+                   "index": -1, "options": {}})
         );
-        assert_eq!(
-            mpv.accept()["command"],
-            json!(["loadfile", "/corpus/clip.mkv"])
-        );
-        mpv.property("pause", json!(false));
         mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
         mpv.property("core-idle", json!(false));
         mpv.send(json!({"event": "playback-restart"}));
-        assert_eq!(next(&events), Event::Started);
-        let question = mpv.command();
-        assert_eq!(question["command"], json!(["get_property", "time-pos"]));
+        assert_eq!(next(&events), Event::Started(open));
+        mpv.report_read(&json!({}));
         let before = Instant::now();
-        mpv.answer(&question, "success", json!(12.5));
-        let Event::Clock(clock) = next(&events) else {
+        mpv.position(12.5);
+        let Event::Clock(clock_open, clock) = next(&events) else {
             panic!("a clock")
         };
+        assert_eq!(clock_open, open);
         assert_eq!(clock.position, Duration::from_millis(12_500));
         assert!(clock.running);
         assert!(clock.at >= before);
     }
 
     #[test]
-    fn a_streams_url_and_headers_go_over_the_connection() {
+    fn opens_are_numbered_in_order() {
+        let (engine, _events, mut mpv) = driven(exited());
+        let first = engine.open(file("/a.mkv")).unwrap();
+        let second = engine.open(file("/b.mkv")).unwrap();
+        assert!(first < second);
+        assert_eq!(first, OpenId(1));
+        mpv.load(1);
+        mpv.load(2);
+    }
+
+    #[test]
+    fn a_streams_headers_are_options_of_its_own_load() {
         let (engine, _events, mut mpv) = driven(exited());
         let headers = vec![
             Header::new("Authorization", "Bearer token, with a comma").unwrap(),
             Header::new("Referer", "https://example.org/").unwrap(),
         ];
         let source = Source::stream("https://example.org/a.mkv?key=1", headers).unwrap();
-        engine.send(Command::Open(source)).unwrap();
+        engine.open(source).unwrap();
         assert_eq!(
-            mpv.accept()["command"],
-            json!([
-                "set_property",
-                "http-header-fields",
-                [
-                    "Authorization: Bearer token, with a comma",
-                    "Referer: https://example.org/"
-                ]
-            ])
+            mpv.load(1)["command"],
+            json!({"name": "loadfile", "url": "https://example.org/a.mkv?key=1",
+                   "flags": "replace", "index": -1,
+                   "options": {"http-header-fields":
+                       r"Authorization: Bearer token\, with a comma,Referer: https://example.org/"}})
         );
-        assert_eq!(
-            mpv.accept()["command"],
-            json!(["loadfile", "https://example.org/a.mkv?key=1"])
-        );
+        // No global option is set: nothing else carries them.
+        engine.open(file("/b.mkv")).unwrap();
+        assert_eq!(mpv.load(2)["command"]["options"], json!({}));
     }
 
     #[test]
@@ -856,7 +1116,7 @@ mod tests {
             (Command::Pause, json!(["set_property", "pause", true])),
             (
                 Command::Seek(Duration::from_millis(83_250)),
-                json!(["seek", 83.25, "absolute"]),
+                json!(["seek", 83.25, "absolute+exact"]),
             ),
             (Command::Stop, json!(["stop"])),
         ] {
@@ -882,6 +1142,94 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_load_ends_its_open() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = engine.open(file("/a.mkv")).unwrap();
+        let load = mpv.command();
+        mpv.answer(&load, "invalid parameter", Value::Null);
+        assert_eq!(
+            next(&events),
+            Event::Ended(open, Ending::Failed("invalid parameter".to_owned()))
+        );
+    }
+
+    #[test]
+    fn an_open_replaced_before_it_loads_ends_once() {
+        let (engine, events, mut mpv) = driven(exited());
+        let first = engine.open(file("/a.mkv")).unwrap();
+        let second = engine.open(file("/b.mkv")).unwrap();
+        mpv.load(1);
+        mpv.load(2);
+        // mpv drops the first entry without a word, and starts the second.
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        assert_eq!(next(&events), Event::Ended(first, Ending::Stopped));
+        // A late end of the first, as mpv may send, ends nothing twice.
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        mpv.send(json!({"event": "playback-restart"}));
+        assert_eq!(next(&events), Event::Started(second));
+    }
+
+    #[test]
+    fn a_source_that_replaces_a_playing_one_gets_its_whole_report() {
+        let (engine, events, mut mpv) = driven(exited());
+        let first = start(&engine, &mut mpv, &events, 1, &hdr_report());
+        // The second source's sound is the same: mpv clears it as the first ends and does not
+        // send it again to its observers. The report reads it.
+        let second = engine.open(file("/b.mkv")).unwrap();
+        mpv.load(2);
+        mpv.property("audio-params", Value::Null);
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        mpv.send(json!({"event": "playback-restart"}));
+        let mut ended = false;
+        loop {
+            match next(&events) {
+                Event::Ended(open, Ending::Stopped) if open == first => ended = true,
+                Event::Report(open, _) if open == first => {}
+                Event::Started(open) => {
+                    assert_eq!(open, second);
+                    break;
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(ended);
+        mpv.report_read(&hdr_report());
+        let Event::Report(open, report) = next(&events) else {
+            panic!("a report")
+        };
+        assert_eq!(open, second);
+        assert_eq!(report.audio.unwrap().codec, "truehd");
+    }
+
+    #[test]
+    fn the_events_of_an_entry_that_is_no_open_are_not_sent() {
+        let (_engine, events, mut mpv) = driven(exited());
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 7}));
+        mpv.send(json!({"event": "playback-restart"}));
+        mpv.property("core-idle", json!(true));
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 7, "reason": "eof"}));
+        quiet(&events);
+    }
+
+    #[test]
+    fn a_playlist_ends_its_open_and_is_stopped() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = engine.open(file("/list.m3u")).unwrap();
+        mpv.load(1);
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
+        mpv.send(
+            json!({"event": "end-file", "playlist_entry_id": 1, "reason": "redirect",
+                        "playlist_insert_id": 2, "playlist_insert_num_entries": 3}),
+        );
+        assert_eq!(
+            next(&events),
+            Event::Ended(open, Ending::Failed("the source is a playlist".to_owned()))
+        );
+        assert_eq!(mpv.accept()["command"], json!(["stop"]));
+    }
+
+    #[test]
     fn the_pause_is_reported_when_it_changes_not_at_start() {
         let (_engine, events, mut mpv) = driven(exited());
         mpv.property("pause", json!(false));
@@ -896,16 +1244,14 @@ mod tests {
 
     #[test]
     fn the_clock_is_read_again_when_playback_stops_or_runs() {
-        let (_engine, events, mut mpv) = driven(exited());
-        start(&mut mpv, &events);
+        let (engine, events, mut mpv) = driven(exited());
+        let open = start(&engine, &mut mpv, &events, 1, &json!({}));
         mpv.property("core-idle", json!(true));
-        let question = mpv.command();
-        mpv.answer(&question, "success", json!(3.0));
-        let Event::Clock(clock) = next(&events) else {
-            panic!("a clock")
-        };
-        assert!(!clock.running);
-        assert_eq!(clock.position, Duration::from_secs(3));
+        mpv.position(3.0);
+        assert!(matches!(
+            next(&events),
+            Event::Clock(o, c) if o == open && !c.running && c.position == Duration::from_secs(3)
+        ));
         // The same state again asks nothing.
         mpv.property("core-idle", json!(true));
         quiet(&events);
@@ -913,32 +1259,30 @@ mod tests {
 
     #[test]
     fn a_stopped_clock_at_the_same_position_is_sent_once() {
-        let (_engine, events, mut mpv) = driven(exited());
-        start(&mut mpv, &events);
+        let (engine, events, mut mpv) = driven(exited());
+        start(&engine, &mut mpv, &events, 1, &json!({}));
         mpv.property("core-idle", json!(true));
-        let question = mpv.command();
-        mpv.answer(&question, "success", json!(5.0));
-        assert!(matches!(next(&events), Event::Clock(c) if !c.running));
+        mpv.position(5.0);
+        assert!(matches!(next(&events), Event::Clock(_, c) if !c.running));
         mpv.send(json!({"event": "playback-restart"}));
-        let question = mpv.command();
-        mpv.answer(&question, "success", json!(5.0));
+        mpv.position(5.0);
         quiet(&events);
     }
 
     #[test]
     fn one_question_for_the_position_at_a_time() {
-        let (_engine, events, mut mpv) = driven(exited());
-        start(&mut mpv, &events);
+        let (engine, events, mut mpv) = driven(exited());
+        start(&engine, &mut mpv, &events, 1, &json!({}));
         mpv.property("core-idle", json!(true));
         let question = mpv.command();
         // A seek's restart while the question is on its way asks nothing more.
         mpv.send(json!({"event": "playback-restart"}));
         mpv.property("core-idle", json!(false));
         mpv.answer(&question, "success", json!(4.0));
-        let Event::Clock(clock) = next(&events) else {
-            panic!("a clock")
-        };
-        assert!(clock.running, "read with the state when the answer came");
+        assert!(
+            matches!(next(&events), Event::Clock(_, c) if c.running),
+            "read with the state when the answer came"
+        );
         quiet(&events);
         // The next change asks again.
         mpv.property("core-idle", json!(true));
@@ -946,30 +1290,30 @@ mod tests {
     }
 
     #[test]
-    fn the_report_comes_after_the_start_then_at_each_change() {
-        let (_engine, events, mut mpv) = driven(exited());
+    fn a_position_answered_after_its_source_ended_sends_no_clock() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = start(&engine, &mut mpv, &events, 1, &json!({}));
+        mpv.property("core-idle", json!(true));
+        let question = mpv.command();
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "eof"}));
+        assert_eq!(next(&events), Event::Ended(open, Ending::Finished));
+        mpv.answer(&question, "success", json!(9.0));
+        quiet(&events);
+    }
+
+    #[test]
+    fn the_report_is_read_at_the_start_then_sent_at_each_change() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = engine.open(file("/a.mkv")).unwrap();
+        mpv.load(1);
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
+        // Observed values before the first frame are not sent.
         mpv.property("video-format", json!("hevc"));
-        mpv.property("hwdec-current", json!("vaapi"));
-        mpv.property(
-            "video-params",
-            json!({"w": 3840, "h": 2160, "primaries": "bt.2020", "gamma": "pq",
-                   "sig-peak": 4.926}),
-        );
-        mpv.property("current-vo", json!("gpu-next"));
-        mpv.property(
-            "video-target-params",
-            json!({"primaries": "bt.709", "gamma": "gamma2.2", "sig-peak": 0.0}),
-        );
-        mpv.property("audio-codec-name", json!("truehd"));
-        mpv.property(
-            "audio-params",
-            json!({"format": "s32", "samplerate": 48000, "channels": "7.1"}),
-        );
-        mpv.property("current-ao", json!("pipewire"));
         quiet(&events);
         mpv.send(json!({"event": "playback-restart"}));
-        assert_eq!(next(&events), Event::Started);
-        let Event::Report(report) = next(&events) else {
+        assert_eq!(next(&events), Event::Started(open));
+        mpv.report_read(&hdr_report());
+        let Event::Report(_, report) = next(&events) else {
             panic!("a report")
         };
         let video = report.video.as_ref().unwrap();
@@ -986,23 +1330,27 @@ mod tests {
         assert_eq!(audio.codec, "truehd");
         assert_eq!(audio.decoded.channels, "7.1");
         assert_eq!(audio.sent, None, "the output has not opened");
+        mpv.position(0.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
 
-        let question = mpv.command();
-        mpv.answer(&question, "success", json!(0.0));
-        assert!(matches!(next(&events), Event::Clock(_)));
         mpv.property("hwdec-current", json!("no"));
-        let Event::Report(report) = next(&events) else {
+        let Event::Report(_, report) = next(&events) else {
             panic!("a report")
         };
         assert_eq!(report.video.unwrap().hardware_decoder, None);
-        // The same value again sends nothing.
+        // The same value again sends nothing, nor does a property the report is not made of.
         mpv.property("hwdec-current", json!("no"));
+        mpv.property("media-title", json!("anything"));
         quiet(&events);
-        // Nor does a report of no track at all, as a source ends.
+        // A reconfiguration reads the report again.
+        mpv.send(json!({"event": "audio-reconfig"}));
+        mpv.report_read(&hdr_report());
+        assert!(matches!(next(&events), Event::Report(..)));
+        // A report of no track at all, as a source ends, is not sent.
         for name in ["video-params", "audio-params"] {
             mpv.property(name, Value::Null);
         }
-        let Event::Report(report) = next(&events) else {
+        let Event::Report(_, report) = next(&events) else {
             panic!("a report")
         };
         assert!(report.video.is_none() && report.audio.is_some());
@@ -1010,68 +1358,46 @@ mod tests {
     }
 
     #[test]
-    fn each_source_gets_its_report_even_when_it_is_the_same_as_the_last() {
-        let (_engine, events, mut mpv) = driven(exited());
-        mpv.property("audio-codec-name", json!("aac"));
-        mpv.property(
-            "audio-params",
-            json!({"format": "floatp", "samplerate": 48000, "channels": "stereo"}),
-        );
-        for _ in 0..2 {
-            mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
-            mpv.send(json!({"event": "playback-restart"}));
-            assert_eq!(next(&events), Event::Started);
-            assert!(matches!(next(&events), Event::Report(_)), "a report");
-            let question = mpv.command();
-            mpv.answer(&question, "success", json!(0.0));
-            assert!(matches!(next(&events), Event::Clock(_)));
-            mpv.send(json!({"event": "end-file", "reason": "stop"}));
-            assert_eq!(next(&events), Event::Ended(Ending::Stopped));
-        }
-    }
-
-    #[test]
     fn a_picture_the_output_could_not_show_is_reported_once() {
-        let (_engine, events, mut mpv) = driven(exited());
-        let tracks = json!([{"id": 1, "type": "video"}, {"id": 1, "type": "audio"}]);
-        mpv.property("track-list", tracks.clone());
-        mpv.property("vid", json!(1));
-        start(&mut mpv, &events);
+        let (engine, events, mut mpv) = driven(exited());
+        let open = start(&engine, &mut mpv, &events, 1, &hdr_report());
         // The output fails: mpv drops the picture and plays on.
-        mpv.property("vid", json!(false));
-        assert_eq!(next(&events), Event::PictureFailed);
-        mpv.property("track-list", tracks);
+        let dropped =
+            json!([{"type": "video", "selected": false}, {"type": "audio", "selected": true}]);
+        mpv.property("track-list", dropped.clone());
+        assert_eq!(next(&events), Event::PictureFailed(open));
+        mpv.property("track-list", dropped);
         quiet(&events);
     }
 
     #[test]
     fn a_source_without_picture_is_no_failure() {
-        let (_engine, events, mut mpv) = driven(exited());
-        mpv.property("track-list", json!([{"id": 1, "type": "audio"}]));
-        mpv.property("vid", json!(false));
-        start(&mut mpv, &events);
+        let (engine, events, mut mpv) = driven(exited());
+        let report = json!({"track-list": [{"type": "audio", "selected": true}]});
+        start(&engine, &mut mpv, &events, 1, &report);
         quiet(&events);
     }
 
     #[test]
     fn each_end_maps_to_an_ending() {
-        let (_engine, events, mut mpv) = driven(exited());
-        for (end, expected) in [
-            (json!({"reason": "eof"}), Some(Ending::Finished)),
-            (json!({"reason": "stop"}), Some(Ending::Stopped)),
+        let (engine, events, mut mpv) = driven(exited());
+        for (entry, end, expected) in [
+            (1, json!({"reason": "eof"}), Ending::Finished),
+            (2, json!({"reason": "stop"}), Ending::Stopped),
             (
+                3,
                 json!({"reason": "error", "file_error": "unrecognized file format"}),
-                Some(Ending::Failed("unrecognized file format".to_owned())),
+                Ending::Failed("unrecognized file format".to_owned()),
             ),
-            (json!({"reason": "redirect"}), None),
         ] {
+            let open = engine.open(file("/a.mkv")).unwrap();
+            mpv.load(entry);
+            mpv.send(json!({"event": "start-file", "playlist_entry_id": entry}));
             let mut message = end;
             message["event"] = json!("end-file");
+            message["playlist_entry_id"] = json!(entry);
             mpv.send(message);
-            match expected {
-                Some(ending) => assert_eq!(next(&events), Event::Ended(ending)),
-                None => quiet(&events),
-            }
+            assert_eq!(next(&events), Event::Ended(open, expected));
         }
     }
 
@@ -1093,9 +1419,12 @@ mod tests {
         };
         assert!(reason.contains("mpv closed its connection"), "{reason}");
         assert!(reason.contains("killed by signal 11"), "{reason}");
-        // The thread has ended: commands now fail, and nothing waits on them.
-        thread::sleep(Duration::from_millis(100));
-        assert_eq!(engine.send(Command::Play), Err(EngineGone));
+        // The thread ends: commands then fail, and nothing waits on them.
+        let deadline = Instant::now() + WAIT;
+        while engine.send(Command::Play).is_ok() {
+            assert!(Instant::now() < deadline, "commands fail once mpv is gone");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -1115,26 +1444,45 @@ mod tests {
         assert!(reason.contains("larger than"), "{reason}");
         assert!(
             reason.contains("did not exit in time and was killed"),
-            "mpv was ended: {reason}"
+            "an mpv that does not quit is ended: {reason}"
         );
         flood.join().unwrap();
     }
 
     #[test]
-    fn malformed_json_ends_the_engine_and_bytes_that_are_not_utf8_do_not() {
-        let (_engine, events, mut mpv) = driven(exited());
-        mpv.writer
-            .write_all(b"{\"event\":\"end-file\",\"reason\":\"error\",\"file_error\":\"\xff\"}\n")
+    fn on_malformed_input_mpv_quits_at_once_as_its_connection_closes() {
+        // cat reads its standard input, the connection, as mpv does, and exits at its end; the
+        // test writes to the engine through another handle on the same end.
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        let mut writer = theirs.try_clone().unwrap();
+        let child = Process::new("cat")
+            .stdin(Stdio::from(OwnedFd::from(theirs)))
+            .stdout(Stdio::null())
+            .spawn()
             .unwrap();
-        assert_eq!(
-            next(&events),
-            Event::Ended(Ending::Failed("\u{fffd}".to_owned()))
-        );
-        mpv.writer.write_all(b"{\"event\": nope}\n").unwrap();
+        let (_engine, events) = Engine::drive(ours, child).unwrap();
+        writer.write_all(b"{\"event\": nope}\n").unwrap();
         let Event::EngineFailed(reason) = next(&events) else {
             panic!("a failure")
         };
         assert!(reason.contains("malformed"), "{reason}");
+        assert!(reason.ends_with("mpv exited with code 0"), "{reason}");
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_are_replaced() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = engine.open(file("/a.mkv")).unwrap();
+        mpv.load(1);
+        mpv.writer
+            .write_all(
+                b"{\"event\":\"end-file\",\"playlist_entry_id\":1,\"reason\":\"error\",\"file_error\":\"\xff\"}\n",
+            )
+            .unwrap();
+        assert_eq!(
+            next(&events),
+            Event::Ended(open, Ending::Failed("\u{fffd}".to_owned()))
+        );
     }
 
     #[test]
@@ -1160,7 +1508,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_the_player_closes_the_connection_and_the_engine_exits() {
+    fn closing_the_player_ends_the_connection_and_the_engine_exits() {
         // cat reads its standard input, the connection, as mpv does, and exits at its end.
         let (ours, theirs) = UnixStream::pair().unwrap();
         let child = Process::new("cat")

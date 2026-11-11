@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use crate::event::Event;
+use crate::event::{Event, OpenId};
 use crate::mpv;
 use crate::source::Source;
 
@@ -49,7 +49,7 @@ pub enum Audio {
 /// Something the rest of Aerith asks of the engine.
 #[derive(Clone, Debug)]
 pub(crate) enum Command {
-    Open(Source),
+    Open(OpenId, Source),
     Play,
     Pause,
     Seek(Duration),
@@ -65,7 +65,9 @@ pub(crate) enum Command {
 ///
 /// On Linux the engine is mpv, a program apart ([ADR-0003]): a crash of mpv ends that program and
 /// is reported, and Aerith goes on. Dropping the player asks mpv to quit, waits up to two seconds
-/// for it, then kills it; if Aerith itself dies, mpv quits as its connection closes.
+/// for it, then kills it; if Aerith itself dies, mpv quits as its connection closes. The program
+/// must ignore `SIGPIPE`, as Rust programs do unless told otherwise: a command written as mpv
+/// dies would otherwise end it.
 ///
 /// [ADR-0003]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0003-mpv-in-its-own-process.md
 /// [ADR-0004]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0004-a-player-engine-per-platform.md
@@ -83,10 +85,13 @@ impl Player {
     }
 
     /// Opens `source` and plays it, unless the player is paused; it replaces what was playing,
-    /// which ends as [`crate::Ending::Stopped`]. [`Event::Started`] follows once its first frame
-    /// is shown, or [`Event::Ended`] with the reason it failed.
-    pub fn open(&self, source: &Source) -> Result<(), EngineGone> {
-        self.engine.send(Command::Open(source.clone()))
+    /// which ends as [`crate::Ending::Stopped`]. Returns the number the events of this source
+    /// carry. Unless the engine fails first, they end with exactly one [`Event::Ended`], and hold
+    /// one [`Event::Started`] before it if the first frame was shown: an open replaced before it
+    /// loads only ends. A source that is a playlist ends as failed: the player plays one media an
+    /// open.
+    pub fn open(&self, source: &Source) -> Result<OpenId, EngineGone> {
+        self.engine.open(source.clone())
     }
 
     /// Plays: the source opened, or the next one.
@@ -99,8 +104,8 @@ impl Player {
         self.engine.send(Command::Pause)
     }
 
-    /// Moves to `position` from the start of the source, to the exact frame. Past the end, the
-    /// source ends.
+    /// Moves to `position` from the start of the source, to the exact frame. Past the end, a
+    /// playing source ends; a paused one stays on its last frame.
     pub fn seek(&self, position: Duration) -> Result<(), EngineGone> {
         self.engine.send(Command::Seek(position))
     }

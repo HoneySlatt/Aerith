@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let since = opened.elapsed().as_secs_f64() * 1000.0;
         println!("{since:9.1} ms  {event:?}");
-        if matches!(event, Event::Ended(_) | Event::EngineFailed(_)) {
+        if matches!(event, Event::Ended(..) | Event::EngineFailed(_)) {
             break;
         }
     }

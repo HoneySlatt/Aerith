@@ -99,19 +99,23 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **How to test.** `cargo test -p aerith-player`.
 - **Measured.** Press-to-first-frame against M1.2's figure; at rest, no wake-up of Aerith's own.
 - **Result.** Done on 2026-11-11. `Player` opens a file or an `http(s)` stream with its headers,
-  plays, pauses, seeks and stops it; its events give the first frame, the pause, a clock, mpv's
-  report (decoder, colours, sound) and its failures. mpv reads its IPC on its standard input, with
-  nothing of the person's; headers and URLs never reach a command line or a log
-  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)). Tests: 28 against a fake
-  mpv; 8 against the real mpv in CI, crash and headers included; the whole corpus by hand, which
-  passes. At rest, 0 wake-ups of Aerith's own, paused, stopped and even playing, checked in CI.
-  The first frame, picture discarded, is within the noise of mpv alone driven the same way; M1.2's
-  figures drew the picture and are not comparable
-  ([figures](measurements.md#m13--mpv-driven-through-aerith-player)). Beyond the plan: an example
-  program (`play`), a `--window` output through Wayland, and `PictureFailed` when mpv drops a
-  picture its output cannot show.
+  plays, pauses, seeks and stops it; each open is numbered, and the events of its source carry
+  the number: the first frame, a clock, mpv's report (decoder, colours, sound), a picture the
+  output could not show, and exactly one end. mpv reads its IPC on its standard input, with
+  nothing of the person's; headers are options of their own load, and no secret reaches a command
+  line, a title or a log ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
+  Tests: 39 unit tests, 29 of them on the mpv engine, most against a fake mpv; 11 against the
+  real mpv, in CI; the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
+  paused and stopped, asserted; 0 while playing, printed only. The player adds no measurable time
+  to the first frame beside mpv with the same options, which make it 36 to 69 ms later than mpv's
+  defaults, picture discarded; M1.2's figures drew the picture and are not comparable
+  ([figures](measurements.md#m13--mpv-driven-through-aerith-player)). The closing review found two
+  defects, fixed with tests: a replacing source of the same sound format lost its sound in the
+  report, and a stream's headers could reach the source opened just before it.
 - **Left, on the owner's go.** The first frame on the desktop, through `--window`, against mpv
-  alone run the same way, about 5 minutes of the screen; again once M1.2 is complete.
+  alone with its defaults and with the player's options, about 5 minutes of the screen; again once
+  M1.2 is complete. If the options' cost holds with a real video output, find which of mpv's
+  scripts the first frame depends on, and why.
 
 ### M1.4 — mpv inside Aerith's window on Linux
 
@@ -154,8 +158,6 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - Contribute to mpv the Vulkan render API its maintainers described, so that the video becomes a
   texture of the interface ([ADR-0003](adr/0003-mpv-in-its-own-process.md)).
 - The player screen as uwui's screen of reference for glass over moving content.
-- Run mpv sandboxed in Aerith too, as its tests run it: no session bus (the keyring is reached
-  through it), no home but its cache, the network only for the stream it plays.
 - The logo drawn again as a true vector, the same flower, without the raster's stray specks: crisp
   at every size and a fraction of its 765 KB ([ADR-0010](adr/0010-the-logo.md)).
 
@@ -170,15 +172,23 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - E-AC3 with Atmos has no source in the corpus ([ADR-0012](adr/0012-the-test-corpus.md)).
 - An mpv that freezes without exiting is not detected: its commands go unanswered
   ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-- mpv fetches streams itself, outside the I/O layer: Stage 2 checks a stream's host against the
-  I/O layer's rules before opening it.
+- mpv fetches streams itself, outside the I/O layer, and FFmpeg sends the headers it was given,
+  but `Authorization`, to the hosts a server redirects to: Stage 2 checks a stream's host, and its
+  redirects, against the I/O layer's rules before giving it a token.
+- mpv runs as the person, with the session's bus (through which the keyring answers) and the home
+  in reach: the separate process isolates crashes, not tokens. Due before Stage 2 stores a token:
+  run mpv in a sandbox, as its tests do, with no bus, no home but its cache, and the network only
+  for its stream ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
+- The clock is not read again while playing: with mpv matching the display's rate, it would drift
+  by up to 1 % (decide at M1.4).
+- `reap` polls every 10 ms, up to 2 s, when mpv ends or is closed; a crash or a close only.
 - The player's report uses mpv's names for codecs, formats and colours, and says nothing of Dolby
   Vision yet (M1.5).
 - `--window` was run only where it fails (`agent-headless`, without a GPU): its picture on a real
   display is untested.
-- `scripts/check.sh` grew from 33 s to 115 s: `scripts/test-check.sh` runs the whole test suite,
-  `at_rest`'s 7 s included, in six of its copies. A lighter way for those copies is the owner's
-  call.
+- `scripts/check.sh` grew from 33 s to about two minutes: `scripts/test-check.sh` runs the whole
+  test suite, `at_rest`'s 9 s included, in six of its copies. A lighter way for those copies is the
+  owner's call ([figures](measurements.md#the-checks)).
 
 Finished stages move to `docs/history.md`, in a few lines each, so that this file holds the current
 stage only, under about 2,000 words.
