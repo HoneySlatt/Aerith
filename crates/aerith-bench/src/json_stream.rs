@@ -316,9 +316,14 @@ mod tests {
                 Duration::from_secs(5),
             )
             .unwrap_err();
+        // A reset, too, when the request was written before the end showed: a process another
+        // test forks holds the other end for an instant, and the end then drops what it did not
+        // read.
         assert!(matches!(
             error.kind(),
-            io::ErrorKind::UnexpectedEof | io::ErrorKind::BrokenPipe
+            io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::ConnectionReset
         ));
     }
 

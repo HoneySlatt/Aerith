@@ -307,6 +307,10 @@ fn read(connection: UnixStream, inbox: &Sender<Message>) {
                 Err(error) => break format!("mpv sent malformed JSON: {error}"),
             },
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            // mpv ended without reading all it was sent: the same end, told differently.
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {
+                break "mpv closed its connection".to_owned();
+            }
             Err(error) => break format!("mpv's connection failed: {error}"),
         }
     };
@@ -1571,6 +1575,19 @@ mod tests {
             assert!(Instant::now() < deadline, "commands fail once mpv is gone");
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn an_mpv_that_ends_without_reading_what_it_was_sent_closed_its_connection() {
+        // The fake leaves the setup unread and closes: its end drops what it holds, a reset.
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        let (_engine, events) = Engine::drive(ours, exited()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        drop(theirs);
+        let Event::EngineFailed(reason) = next(&events) else {
+            panic!("a failure")
+        };
+        assert!(reason.starts_with("mpv closed its connection"), "{reason}");
     }
 
     #[test]
