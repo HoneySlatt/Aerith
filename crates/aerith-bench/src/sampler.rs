@@ -173,9 +173,13 @@ mod tests {
 
     #[test]
     fn the_sampler_reads_a_running_tree() {
-        let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
         let sampler = Sampler::start(child.id(), Vec::new(), None);
-        thread::sleep(Duration::from_millis(1500));
+        // Two readings, however loaded the machine: reading /proc takes longer when it is busy.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while sampler.samples.lock().unwrap().len() < 2 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
         assert!(sampler.sound_device_opened().is_none());
         let samples = sampler.finish();
         child.kill().unwrap();
