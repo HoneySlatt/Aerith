@@ -67,6 +67,11 @@ impl TestDir {
             "--bind".to_owned(),
             self.root.join("home").display().to_string(),
             home,
+            // The test's own folder, bound back: the system's temporary folder may lie inside the
+            // person's home, as on CI's runner.
+            "--bind".to_owned(),
+            self.root.display().to_string(),
+            self.root.display().to_string(),
         ];
         for folder in readable {
             let folder = folder.display().to_string();
@@ -168,12 +173,15 @@ impl TestDir {
     }
 
     /// Fails if anything was written in the home that stood for the person's. `readable` are the
-    /// folders given to [`Self::mpv`]: bubblewrap makes their mount points, empty, in that home.
+    /// folders given to [`Self::mpv`]: bubblewrap makes their mount points, and the test folder's
+    /// when it lies in the person's home, empty, in that home.
     pub fn assert_home_untouched(&self, readable: &[&Path]) {
         let home = self.root.join("home");
         let person = PathBuf::from(std::env::var("HOME").unwrap());
         let mount_points: Vec<PathBuf> = readable
             .iter()
+            .copied()
+            .chain([self.root.as_path()])
             .filter_map(|folder| folder.strip_prefix(&person).ok())
             .map(|inside| home.join(inside))
             .collect();
