@@ -53,6 +53,14 @@
             pkgs.pkg-config
           ];
           buildInputs = [ pkgs.wayland ];
+          # What aerith-testbed's winit and wgpu load when they run (ADR-0017): libwayland-client,
+          # which winit opens itself (and the relay with it, in a build of the whole workspace),
+          # libxkbcommon for the keyboard, and the Vulkan loader, which finds the system's drivers.
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+            pkgs.wayland
+            pkgs.libxkbcommon
+            pkgs.vulkan-loader
+          ];
           # The mpv aerith-player's tests drive: the same build as the bench's mpv, without the
           # wrapper that adds yt-dlp, which the player never loads.
           AERITH_TEST_MPV = "${pkgs.mpv-unwrapped}/bin/mpv";

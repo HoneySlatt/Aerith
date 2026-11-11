@@ -1,0 +1,34 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
+# the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+[package]
+name = "aerith-testbed"
+description = "A test window: plays a file through aerith-player, in its plane, under test controls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# A tool for measuring, thrown away at Stage 3 (ADR-0017): never published, whatever the workspace
+# says.
+publish = false
+
+# Wayland only, as aerith-player's plane: on other systems the testbed builds empty, and pulls none
+# of these.
+[target.'cfg(target_os = "linux")'.dependencies]
+aerith-player = { path = "../aerith-player" }
+# The window, as uwui's host makes it (ADR-0017). Pinned exactly: the "above" order relies on what
+# winit 0.30.13 does with the window's surface (`src/surfaces.rs`).
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen"] }
+# The controls and the panel, drawn on the GPU through Vulkan.
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }
+# The window's display and surfaces, handed to wgpu and to the player.
+raw-window-handle = "0.6"
+# The testbed's own surfaces on winit's connection: the interface's subsurface and the black root
+# of the "above" order, and the frame callbacks that pace the drawing. `system` joins a connection
+# libwayland already holds.
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[lints]
+workspace = true

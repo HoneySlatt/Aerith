@@ -10,9 +10,9 @@
 //!     [--seconds N] [--mpv PROGRAM] [--header "Name: value"]...
 //! ```
 //!
-//! The picture is discarded: showing it needs a window of an interface's, and the test interface,
-//! `aerith-testbed` (ADR-0017), does not exist yet. By default the sound is discarded too, and
-//! nothing is heard; `--sound` plays it. The player stops after `--seconds`, 10 by default. mpv's shader
+//! The picture is discarded: showing it needs a window of an interface's, which the test interface,
+//! `aerith-testbed` (ADR-0017), gives. By default the sound is discarded too, and nothing is heard;
+//! `--sound` plays it. The player stops after `--seconds`, 10 by default. mpv's shader
 //! cache goes to a fresh folder under the system's temporary folder, removed at the end.
 
 #[cfg(target_os = "linux")]

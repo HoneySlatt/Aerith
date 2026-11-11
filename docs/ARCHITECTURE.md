@@ -2,8 +2,9 @@
 
 This file describes the parts the decisions call for; it is rewritten to the code as each part is
 built. Of Aerith's own parts, only the player exists: `aerith-player` drives mpv on Linux, its
-picture discarded or shown in a plane of the interface's window, through the player's relay. The
-bench, a tool beside Aerith, exists.
+picture discarded or shown in a plane of the interface's window, through the player's relay. Two
+tools beside Aerith exist: the test window, which shows that plane until the interface does, and
+the bench.
 
 ## The workspace
 
@@ -25,6 +26,8 @@ is in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 - **The core** (Stage 2): addon protocol, accounts, storage, sources, the I/O layer. It needs no
   window and no GPU.
 - **The interface** (Stage 3): on uwui ([ADR-0005](adr/0005-the-interface-on-uwui-a-later-client.md)).
+  Until then, a test window stands in for it on Linux, to measure the plane
+  ([below](#the-test-window)).
 
 ## The player on Linux
 
@@ -108,6 +111,37 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   everything the relay made on the window's connection, before it returns. mpv takes the end of
   its connection as its window closed, and quits: the player reports `EngineFailed`. The
   interface closes the plane before it destroys its window.
+
+## The test window
+
+`aerith-testbed` ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) is a program apart,
+removed when Stage 3's interface plays a film. It hosts the player as an interface will: winit's
+window, its Wayland connection and surfaces handed to `Player::start` as a `Window`, and the plane
+placed, shown and closed from the window's thread.
+
+```text
+winit's loop ── place, show, close ──▶ Plane ──▶ relay ──▶ window's connection
+winit's loop ◀── UserEvent ── aerith-testbed-events ◀── player's events
+winit's loop ◀── open, pause, controls, quit ── aerith-testbed-schedule ──▶ stats on stdout
+```
+
+- **Two orders of the surfaces**, which M1.4b compares. `below`: the plane under winit's surface,
+  which wgpu draws transparent but for the controls. `above`: winit's surface holds a black pixel
+  that its viewport scales to the window; the plane lies on it, under a subsurface of the testbed's
+  own, which wgpu draws and which holds no buffer while the controls are hidden, so that the
+  compositor has the video alone to show.
+- **One commit for each change.** A new place or visibility of the plane, and each frame of the
+  testbed's subsurface, show at the next commit of winit's surface, with the frame drawn: wgpu's
+  present in the "below" order, the testbed's own commit in the "above" order.
+- **Paced by the surface drawn.** The testbed joins winit's connection with a queue of its own
+  (`src/surfaces.rs`), asks a frame callback of the surface it draws, and draws again only once it
+  came and only if what the controls show changed. winit's own pacing is not used: a surface the
+  video covers gets no frame callbacks (wlroots issue 4133).
+- **At rest, asleep.** winit's loop waits with no deadline unless the controls show or a frame
+  callback is awaited; the player's events and the run's timeline come from two threads of the
+  testbed's, through winit's proxy. Like the interface's thread, winit's wakes for every event on
+  the window's connection, mpv's included ([above](#the-relay)).
+- **The end.** The plane closes before wgpu's surface, the testbed's surfaces and the window go.
 
 ## The bench
 

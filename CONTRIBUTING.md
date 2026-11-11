@@ -24,7 +24,10 @@ It holds:
   unprivileged user namespaces; CI's Ubuntu runner turns them on first;
 - mpv, which the player's tests drive, named by `AERITH_TEST_MPV`: the same build as the bench's
   mpv, without its wrapper;
-- `pkg-config` and libwayland, with which the player's relay links `libwayland-client`.
+- `pkg-config` and libwayland, with which the player's relay links `libwayland-client`;
+- on `LD_LIBRARY_PATH`, the libraries the test window, `aerith-testbed`, loads as it runs:
+  libwayland-client, libxkbcommon and the Vulkan loader. winit loads libwayland-client itself, and
+  in a build of the whole workspace the relay then does too.
 
 The first entry downloads the toolchain, about 150 MB, and mpv with what it needs: 752 MiB once
 unpacked, shared in part with the rest.
@@ -44,8 +47,9 @@ empty, and only its tests of sources and clocks run.
 
 ## Building and testing
 
-The workspace holds `aerith-player`, Aerith's player, and `aerith-bench`, the bench
-([below](#the-bench)). The commands that build and test the workspace:
+The workspace holds `aerith-player`, Aerith's player, `aerith-testbed`, the test window
+([below](#the-test-window)), and `aerith-bench`, the bench ([below](#the-bench)). The commands that
+build and test the workspace:
 
 ```sh
 cargo build --workspace
@@ -106,11 +110,75 @@ cargo run --release -p aerith-player --example play -- <file or URL> [--sound] \
 ```
 
 plays a file or a stream through the player and prints each event, with the time since it was
-opened, a second after the player started. The picture is discarded: showing it needs a window of
-an interface's, and the test interface, `aerith-testbed`
-([ADR-0017](docs/adr/0017-a-test-interface-on-winit-and-wgpu.md)), does not exist yet.
-`--sound` plays the sound aloud. It runs the `mpv` of `PATH`, or the program `--mpv` names, with
-your own home: mpv writes nothing there itself. Play test clips only.
+opened, a second after the player started. The picture is discarded; the test window
+([below](#the-test-window)) shows it. `--sound` plays the sound aloud. It runs the `mpv` of `PATH`,
+or the program `--mpv` names, with your own home: mpv writes nothing there itself. Play test clips
+only.
+
+### The test window
+
+`aerith-testbed` ([ADR-0017](docs/adr/0017-a-test-interface-on-winit-and-wgpu.md)) opens a window
+on Wayland, on winit and wgpu, and plays a file or stream through the player, mpv's picture in the
+player's plane, under test controls and a translucent panel. Its crate documentation, in
+`crates/aerith-testbed/src/main.rs`, says what each option does and gives the format of
+`--stats`.
+
+```sh
+aerith-testbed <file or URL> [--order below|above] [--fullscreen] [--letterbox] [--seconds N]
+    [--pause-after N] [--toggle-controls N] [--stats] [--mpv PROGRAM] [--sound]
+```
+
+- `--order below`, the default, puts the video under the window's own surface, transparent;
+  `--order above` puts it on a black pixel, under a surface of the testbed's own.
+- It opens the source a second after the player starts, prints the time to the first frame on
+  stderr, and quits `--seconds` after it (10 by default).
+- `--stats` prints, each second, the plane's frames and the wake-ups of the window's thread and of
+  the relay's, as JSON lines on stdout.
+- Keys: space plays or pauses, the arrows seek 10 s, `f` toggles fullscreen, `h` the controls,
+  `q` or Escape quits. The controls show on a key or a move of the pointer, for 3 s.
+- The sound is discarded unless `--sound` is given. mpv's caches and the GPU driver's go to a
+  folder under the system's temporary folder, removed at the end.
+
+**In `agent-headless`.** The services that run agents have no display: `agent-headless --sway`
+gives the testbed a headless sway of its own. That sway offers no `linux-dmabuf`, so both mpv and
+wgpu draw with lavapipe, Mesa's Vulkan driver on the CPU: `VK_DRIVER_FILES` shows wgpu lavapipe
+alone, and a wrapper gives mpv the options the player's tests give it. Inside `nix develop`:
+
+```sh
+cargo build --release -p aerith-testbed
+lavapipe=/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json
+mkdir -p /tmp/testbed
+# A clip of 5 s, made by mpv's own encoder, as the player's tests make theirs.
+HOME=/tmp/testbed "$AERITH_TEST_MPV" --no-config --of=matroska --ovc=ffv1 \
+    --o=/tmp/testbed/clip.mkv "av://lavfi:testsrc2=size=1280x720:rate=24:duration=5"
+# mpv on lavapipe, with the options the player's tests add after the player's own.
+cat > /tmp/testbed/mpv <<EOF
+#!/bin/sh
+export VK_DRIVER_FILES=$lavapipe
+exec "\$AERITH_TEST_MPV" "\$@" --gpu-sw=yes --gpu-context=waylandvk
+EOF
+chmod +x /tmp/testbed/mpv
+agent-headless --sway -- env VK_DRIVER_FILES="$lavapipe" target/release/aerith-testbed \
+    /tmp/testbed/clip.mkv --seconds 5 --stats --toggle-controls 2 --mpv /tmp/testbed/mpv
+```
+
+`--order above` plays the other order; `--pause-after 2 --seconds 8` shows the window's thread and
+the relay's asleep while paused. The headless output is 3840 × 2160, drawn by pixman: it shows a
+few frames a second, and frame callbacks come late. `swaymsg output HEADLESS-1 resolution
+1280x720`, run inside `agent-headless` before the testbed, lets it keep up. Figures there are not
+tier figures.
+
+**On a desktop**, inside `nix develop`, with the pinned mpv and a clip of the corpus:
+
+```sh
+cargo run --release -p aerith-testbed -- ~/.cache/aerith-bench/corpus/<clip> \
+    --mpv "$AERITH_TEST_MPV" --fullscreen --stats
+```
+
+An agent runs it on the owner's display only through `owner-desktop --`, with the owner's go.
+The window shows as long as `--seconds` says; `q` ends it sooner. The "above" order needs a
+compositor that offers fractional scaling and viewports, as the headless sway does; the testbed
+says so and stops on one that does not.
 
 ### The relay's fuzz target
 
