@@ -300,3 +300,86 @@ with the testbed.
 
 Trial runs before it found three defects, fixed with tests
 ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
+
+### Inside the testbed, on the desktop
+
+Measured on 2026-11-11 from 22:35 to 22:42 CET on the owner's desktop, through `owner-desktop`.
+Setup:
+- the display: DP-3 at 240.016 Hz, scale 1.5, SDR, Umbriel;
+- `aerith-testbed` fullscreen ([CONTRIBUTING](../CONTRIBUTING.md#the-test-window)), the pinned mpv
+  0.42.0 through the relay;
+- the sound discarded, a fresh home;
+- the source opened 1 s after the player started.
+
+Every mpv decoded with `vaapi` and drew through gpu-next. Scripts outside the repository drove the
+runs (`/tmp/m14-desk`, thrown away).
+
+**The corpus's SDR clips**, 8 s each:
+- In the order below: `sdr-2160p-hevc10-eac3`, the seven `cadence-*` clips and `audio-eac3-5.1`.
+- In the order above: `sdr-2160p-hevc10-eac3`, `cadence-23.976` and `cadence-59.94`.
+
+Each played to its end with 0 frames discarded. At most one frame committed was not yet presented
+when the run stopped.
+
+**The time to the first frame**, the clip `hdr10-2160p-hevc10-eac3` (mpv tone-maps it to this SDR
+desktop):
+
+| What | Caches | Runs, ms |
+|---|---|---|
+| The testbed, through the relay, mpv's window ready | empty at each run | 203.4, 206.7, 207.7, 196.6, 202.3 |
+| The same | kept between runs (`--cache`) | 519.0, 234.0, 97.4, 69.6, 70.4, 69.2 |
+| mpv alone, `--no-config --force-window`, the clip loaded 2 s after start | kept between runs | 241.3, 79.5, 80.6, 79.7, 80.8 |
+| Through the player at M1.3, mpv's own window opened at the load ([above](#against-m12-on-the-desktop)) | empty at each run | 243.6 to 248.9 |
+
+Readings:
+- **Settled, with its caches, Aerith shows the first frame in about 70 ms**, against about 80 ms
+  for mpv alone run the same way.
+- **The ~100 ms gap that M1.3 saw** came mostly from empty shader caches, and partly from mpv's
+  window opening at the load.
+- The first runs with kept caches are slower: 519 and 234 ms through the testbed, 241 ms for mpv
+  alone. The GPU driver's cache fills too.
+
+**While playing**, `cadence-23.976` for 60 s, controls hidden, counted over the last 55 s:
+
+| Order | The window's thread | The relay's thread | mpv's frames presented | Presented without a copy (`zero_copy`) |
+|---|---|---|---|---|
+| Below | 50.2 wake-ups a second | 141.8 a second | 23.96 a second | 0 |
+| Above | 50.9 a second | 141.6 a second | 23.96 a second | 0 |
+
+- **The window's thread wakes about twice a frame** for the compositor's events addressed to mpv,
+  on the socket it shares with the relay
+  ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
+- **Umbriel never scanned the video out**, in either order. Its log shows no change from
+  composited during the testbed's runs. For mpv alone it showed `direct scanout on` while idle, and
+  `off (color_conversion)` on the HDR clip.
+
+  The probable cause: the relay does not pass mpv's opaque region. Umbriel then cannot cull the
+  black root under the video, and has two buffers to show. To fix before M1.4b compares the orders.
+- **Refresh gaps between consecutive presented frames**, at 240.016 Hz. A 23.976 fps frame should
+  last 10 refreshes, with one of 11 about every 3.9 s.
+
+  | Order | 10 refreshes | 9 | 11 | Total frames |
+  |---|---|---|---|---|
+  | Below | 1,280 | 71 | 86 | 1,443 |
+  | Above | 1,260 | 81 | 95 | 1,443 |
+
+  The 59.94 and 60 fps clips showed 3 and 5 refreshes around their 4 in the same way. Whether mpv
+  alone does the same is M1.4b's to measure: it paces itself in MAILBOX on Umbriel, which has no
+  fifo-v1. It bears on the cadence floor.
+
+**mpv's memory while idle**, PSS 3 s after its start:
+- 137 MiB with its window and video output ready (`--force-window=yes`);
+- 53 MiB without.
+
+Keeping it ready costs 84 MiB, on this tier, for the whole time Aerith runs.
+
+**The checks' and CI's time** with the relay and the testbed:
+
+| What | Before | After |
+|---|---|---|
+| CI, Linux job | 3 min 50 s (run 43062941172) | 6 min 30 s (run 43104131678) |
+| CI, Windows job | 50 s | 50 s |
+| `scripts/check.sh`, warm | 3 min 24 s | 3 min 15 s to 3 min 19 s |
+
+The check's CPU time grew from 2 min 12 s to about 4 min 15 s, with the testbed's build; its wall
+time is dominated by `scripts/test-check.sh`'s copies.

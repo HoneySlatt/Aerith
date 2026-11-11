@@ -147,8 +147,11 @@ Aerith's window under a test interface, measured against the rivals. Planned by
       ([figures](measurements.md#the-relay-against-a-fake-compositor)).
     - the testbed ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)), run in
       `agent-headless` in both orders, asleep while paused.
-  - Next, on the owner's display: the corpus's SDR clips through the testbed, the first frame, the
-    wake-ups while playing, mpv's memory while idle with its window ready.
+    - on the owner's display ([figures](measurements.md#inside-the-testbed-on-the-desktop)): the
+      corpus's SDR clips play in both orders; the first frame in about 70 ms with caches kept,
+      against about 80 ms for mpv alone; the window's thread wakes about 50 times a second while a
+      film plays.
+  - Left: the closing review.
 
 ### M1.4b — Inside the window, measured
 
@@ -242,8 +245,16 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
   libwayland-client at run time, the player's included: the development shell sets
   `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
-- The relay's count of refresh gaps stayed 0 in headless sway: to check on Umbriel before M1.4b
-  reads cadence from it.
+- The relay passes neither mpv's opaque region nor its damage: Umbriel never scanned the video
+  out in either order. To fix before M1.4b compares the orders.
+- Through the relay, at 240 Hz, about 11 % of 23.976 fps frames lasted 9 or 11 refreshes rather
+  than 10. Whether mpv alone does the same (its own pacing in MAILBOX, without fifo-v1) is
+  M1.4b's to measure, against the cadence floor.
+- The window's thread wakes about 50 times a second while a film plays, for events addressed to
+  mpv on the socket it shares with the relay. `wl-proxy` would spare it
+  ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)); the owner weighs it.
+- mpv's window ready from the start costs 84 MiB while idle on the high tier; the lowest laptop is
+  measured at M1.5.
 - `scripts/test-check.sh` copies `.git` with tar: in a git worktree, where `.git` is a file, its
   cases stage scratch files in the worktree's own index.
 - `scripts/check.sh` grew from 33 s to about two minutes: `scripts/test-check.sh` runs the whole
