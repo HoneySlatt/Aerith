@@ -17,8 +17,13 @@ The terms Aerith coins or uses in a sense of its own.
 - **Relay**: the part of `aerith-player` that serves mpv as a Wayland compositor, checks each of
   its requests, and issues its own on the interface's connection, placing mpv's picture in the
   video plane ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)).
-- **Testbed**: `aerith-testbed`, the test interface of Stage 1, never shipped
+- **Testbed**, or test window: `aerith-testbed`, the test interface of Stage 1, never shipped
   ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)).
+- **Order of the surfaces**: where the video plane lies in the window. *Below*: under the window's
+  own surface, which is transparent over the video. *Above*: over the window's own surface, which
+  holds an opaque black pixel (the *black root*), and under a surface of the interface's that holds
+  nothing while the controls are hidden, so that the compositor may show the video alone. M1.4b
+  measures both.
 - **Bench**: the tool of Stage 1, `aerith-bench`, and its scripts, that play the corpus and measure
   the budgets ([ADR-0013](adr/0013-the-bench.md)).
 - **Corpus**: the clips the bench plays, each with its source and licence

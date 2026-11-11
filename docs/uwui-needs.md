@@ -24,15 +24,15 @@ The interface sits above it and, on Android, Windows and Apple, cannot read its 
 | Need | Mark | uwui today |
 |---|---|---|
 | A region of the window left open over a video plane that the host places below the interface's surface, moved and resized with the interface in the same frame | Indispensable, Stage 3 | New |
-| On Wayland, a surface from another process (mpv's buffers through Aerith's own compositor) composed as a subsurface; filed jointly with Magnolia's plugin windows | Indispensable, Stage 3 | New |
+| On Wayland, a surface from another process (mpv's buffers through Aerith's relay, [ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)) composed as a subsurface; filed jointly with Magnolia's plugin windows | Indispensable, Stage 3 | New |
 | The same buffers imported as a texture an element shows (dma-buf), so glass over the video can blur it where the platform allows | Wished, Stage 3 | Planned: textures updated at each frame, first stage |
 | Glass that degrades to a tint without blur over a plane it cannot read, by rule of the theme | Indispensable, Stage 3 | New |
 | A colour description per surface: an SDR interface over an HDR plane on Wayland, Windows, Android and Apple | Indispensable, Stage 3 | Planned: HDR, before 1.0 (ROADMAP) or from Stage 6d (ADR-0190); the documents disagree |
 | Presents timed to the content's cadence under VRR (`commit-timing`), for the interface during playback | Wished, Stage 3 | New |
 | A morph between an element (a poster) and the video plane's region | Wished, Stage 3 | Planned: motion, first stage |
-| Content drawn into a surface of uwui's own above the plane, paced by that surface's frame callbacks, never the window's root, its input passing through to the window: needed only if M1.4b keeps the order where the video covers a black root, which lets the compositor scan the video out ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)) | Measured at M1.4b, Stage 3 | New (added at M1.4) |
+| Content drawn into a surface of uwui's own above the plane, paced by that surface's frame callbacks, never the window's root, its input passing through to the window: needed only if M1.4b keeps the order where the video covers a black root, which lets the compositor scan the video out ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)) | Indispensable, Stage 3, if M1.4b keeps that order | New (added at M1.4) |
 | The window's *suspended* state given to the plane's host, so that a hidden window stops the engine drawing | Wished, Stage 3 | New (added at M1.4) |
-| The window's own surface, its buffer and its scaling, in the interface's hands: winit 0.30 puts a viewport of its own on it, so the order where the video covers a black root reuses winit's viewport, and Umbriel offers no single-pixel buffer ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) | Measured at M1.4b, Stage 3 | New (added at M1.4) |
+| The window's own surface, its buffer and its scaling, in the interface's hands: winit 0.30 puts a viewport of its own on it, so the order where the video covers a black root reuses winit's viewport, and Umbriel offers no single-pixel buffer ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) | Indispensable, Stage 3, if M1.4b keeps that order | New (added at M1.4) |
 | An event queue of the application's own woken by the interface's loop: winit 0.30 calls the application only for its own events, so the testbed re-checks its frame callbacks on a deadline | Wished, Stage 3 | New (added at M1.4) |
 
 ## The couch and the remote

@@ -328,16 +328,20 @@ desktop):
 |---|---|---|
 | The testbed, through the relay, mpv's window ready | empty at each run | 203.4, 206.7, 207.7, 196.6, 202.3 |
 | The same | kept between runs (`--cache`) | 519.0, 234.0, 97.4, 69.6, 70.4, 69.2 |
-| mpv alone, `--no-config --force-window`, the clip loaded 2 s after start | kept between runs | 241.3, 79.5, 80.6, 79.7, 80.8 |
+| mpv alone, `--no-config --force-window --hwdec=auto-safe --ao=null`, fullscreen, the clip loaded 2 s after start, over a socket | kept between runs | 241.3, 79.5, 80.6, 79.7, 80.8 |
 | Through the player at M1.3, mpv's own window opened at the load ([above](#against-m12-on-the-desktop)) | empty at each run | 243.6 to 248.9 |
 
 Readings:
 - **Settled, with its caches, Aerith shows the first frame in about 70 ms**, against about 80 ms
-  for mpv alone run the same way.
-- **The ~100 ms gap that M1.3 saw** came mostly from empty shader caches, and partly from mpv's
-  window opening at the load.
+  for mpv alone. The runs differ: the testbed opens 1 s after the player starts, with the
+  player's options; mpv alone loads 2 s after its start, with fewer options.
+- **With empty caches at each run**, the player went from 244–249 ms at M1.3 to 197–208 ms with
+  mpv's window ready. M1.3's mpv alone, also with empty caches, took 126–149 ms. Today's first
+  mpv-alone run, with an empty cache, took 241 ms. The two sessions' mpv-alone figures disagree,
+  with different options; why is not known.
 - The first runs with kept caches are slower: 519 and 234 ms through the testbed, 241 ms for mpv
-  alone. The GPU driver's cache fills too.
+  alone. The GPU driver's cache fills too. Why the testbed's first run (519 ms) is slower than
+  its runs with empty caches (about 203 ms) is not known.
 
 **While playing**, `cadence-23.976` for 60 s, controls hidden, counted over the last 55 s:
 
@@ -377,9 +381,17 @@ Keeping it ready costs 84 MiB, on this tier, for the whole time Aerith runs.
 
 | What | Before | After |
 |---|---|---|
-| CI, Linux job | 3 min 50 s (run 43062941172) | 6 min 30 s (run 43104131678) |
+| CI, Linux job | 3 min 43 s (run 43062941172) | 6 min 30 s (run 43104131678) |
 | CI, Windows job | 50 s | 50 s |
 | `scripts/check.sh`, warm | 3 min 24 s | 3 min 15 s to 3 min 19 s |
 
-The check's CPU time grew from 2 min 12 s to about 4 min 15 s, with the testbed's build; its wall
-time is dominated by `scripts/test-check.sh`'s copies.
+- The check's "before" ran at `df40898`, after the relay, in a scratch clone with its own target
+  folder; its "after" with the testbed. M1.3's 126.9 s ran before the relay, at another load.
+- The check's CPU time grew from 2 min 12 s to about 4 min 15 s, with the testbed's build. Its
+  wall time is dominated by `scripts/test-check.sh`'s copies.
+- **At rest through the testbed**, in `agent-headless` with lavapipe, the clip paused after 2 s,
+  over the last 4 to 5 s:
+  - order below: the window's thread and the relay's woke 0 times;
+  - order above: the same, 0 and 0.
+
+  At rest on the desktop was not measured.

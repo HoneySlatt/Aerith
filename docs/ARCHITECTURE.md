@@ -74,12 +74,13 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   Wayland server, in pure Rust, through a socket pair of its own; the server offers a list of
   globals and plays `xdg_wm_base` itself. At the socket, the relay counts every request, whatever
   its object (`wl_display`'s included), every registry and every file descriptor, and ends mpv's
-  connection past a ceiling: 4,096 requests or 128 files in one wake-up, 28 files with one
-  message, 32,768 registries. A wake-up thus handles a bounded part of what mpv sends.
+  connection past a ceiling ([ADR-0018](adr/0018-what-building-the-relay-changed.md); the figures
+  in `src/relay/socket.rs`). A wake-up thus handles a bounded part of what mpv sends.
 - The relay keeps the state of each of mpv's objects. Each request is checked against what the
   compositor would refuse (`src/relay/check.rs`), and counted against ceilings on what the relay
-  holds for mpv: 4,096 objects, 64 shared-memory pools' files, and 64 files that no request took
-  (mpv sent them with requests that take none, which the server keeps queued). Then it stays in
+  holds for mpv (`src/relay/mod.rs`): objects, shared-memory pools' files, and files that no
+  request took (mpv sent them with requests that take none, which the server keeps queued). The
+  checks follow wlroots 0.20, Umbriel's base. Then it stays in
   the relay or is issued again on the window's connection. A refused request ends mpv's
   connection with a protocol error, never the window's; the relay tells the engine thread, which
   ends mpv and sends `EngineFailed`.
@@ -146,7 +147,7 @@ winit's loop ◀── open, pause, controls, quit ── aerith-testbed-schedul
 ## The bench
 
 `aerith-bench` is a program apart, not part of what users run ([ADR-0013](adr/0013-the-bench.md)).
-It depends on nothing of Aerith yet; at M1.4 it will measure Aerith through `aerith-player`.
+It depends on nothing of Aerith yet; at M1.4b it will measure Aerith through `aerith-testbed`.
 
 - `run` makes one run: `sandbox` is the bubblewrap namespace every program of the run starts in
   (no sound device, the run's own home), `audio` starts the silent sound server, `rivals` starts a

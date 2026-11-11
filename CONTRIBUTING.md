@@ -58,7 +58,7 @@ cargo test --workspace
 
 ### The player's tests
 
-`cargo test -p aerith-player` runs three kinds of test
+`cargo test -p aerith-player` runs four kinds of test
 ([ADR-0014](docs/adr/0014-the-player-interface-and-mpvs-connection.md)):
 
 - in `src/`, against a fake mpv: every event, error and limit, on Linux. The relay's
@@ -159,15 +159,15 @@ export VK_DRIVER_FILES=$lavapipe
 exec "\$AERITH_TEST_MPV" "\$@" --gpu-sw=yes --gpu-context=waylandvk
 EOF
 chmod +x /tmp/testbed/mpv
-agent-headless --sway -- env VK_DRIVER_FILES="$lavapipe" target/release/aerith-testbed \
-    /tmp/testbed/clip.mkv --seconds 5 --stats --toggle-controls 2 --mpv /tmp/testbed/mpv
+# The headless output, made smaller so that its software compositor keeps up.
+agent-headless --sway -- sh -c "swaymsg output HEADLESS-1 resolution 1280x720 && \
+    VK_DRIVER_FILES=$lavapipe target/release/aerith-testbed /tmp/testbed/clip.mkv \
+    --seconds 5 --stats --toggle-controls 2 --mpv /tmp/testbed/mpv"
 ```
 
 `--order above` plays the other order; `--pause-after 2 --seconds 8` shows the window's thread and
 the relay's asleep while paused. The headless output is 3840 × 2160, drawn by pixman: it shows a
-few frames a second, and frame callbacks come late. `swaymsg output HEADLESS-1 resolution
-1280x720`, run inside `agent-headless` before the testbed, lets it keep up. Figures there are not
-tier figures.
+few frames a second unless made smaller, as above. Figures there are not tier figures.
 
 **On a desktop**, inside `nix develop`, with the pinned mpv and a clip of the corpus:
 

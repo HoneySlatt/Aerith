@@ -13,9 +13,9 @@ Windows, macOS, iPhone, Apple TV, Android phones and Android TV, at a desk and o
 
 Designed, being built. The Rust workspace and its checks exist, and so does the bench that
 measures the rivals Aerith is held to (mpv, Kodi, Stremio, Jellyfin Desktop). Aerith's player
-opens, plays, pauses, seeks and stops a file or a stream through mpv on Linux; its picture does not
-yet sit inside a window of Aerith's own, and there is no interface. The first stage, the player on
-the desktop, is under way.
+opens, plays, pauses, seeks and stops a file or a stream through mpv on Linux, and shows mpv's
+picture inside a window, under a test window that ships to no one; there is no interface yet. The
+first stage, the player on the desktop, is under way.
 
 Aerith installs no content source of its own. What you play through it is your responsibility.
 

@@ -147,11 +147,13 @@ Aerith's window under a test interface, measured against the rivals. Planned by
       ([figures](measurements.md#the-relay-against-a-fake-compositor)).
     - the testbed ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)), run in
       `agent-headless` in both orders, asleep while paused.
-    - on the owner's display ([figures](measurements.md#inside-the-testbed-on-the-desktop)): the
-      corpus's SDR clips play in both orders; the first frame in about 70 ms with caches kept,
-      against about 80 ms for mpv alone; the window's thread wakes about 50 times a second while a
-      film plays.
-  - Left: the closing review.
+    - on the owner's display ([figures](measurements.md#inside-the-testbed-on-the-desktop)), on
+      Umbriel with real dma-bufs:
+      - 9 of the corpus's 14 SDR clips played in the order below, 3 of them in the order above;
+        the five other `audio-*` clips were not played;
+      - the first frame in about 70 ms with caches kept, against about 80 ms for mpv alone;
+      - the window's thread woke about 50 times a second while a film played, the relay's 142.
+    - the closing review, its findings fixed or recorded below.
 
 ### M1.4b — Inside the window, measured
 
@@ -159,6 +161,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   display sync are decided with figures.
 - **Delivers.**
   - The bench measuring Aerith through the testbed.
+  - Before the orders are compared: the relay passes mpv's opaque region, or the reason Umbriel
+    never scanned the video out is found (mpv's buffer format on RADV first).
+  - The image floor: Aerith's frames compared with mpv alone's.
   - The two orders of the surfaces, the video above a black root with the interface above it, or
     under a transparent root: GPU power against mpv alone, whether Umbriel scans the video out,
     hitches over 60 toggles of the controls. The owner decides with these and a uwui session.
@@ -230,8 +235,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
 - The player's report uses mpv's names for codecs, formats and colours, and says nothing of Dolby
   Vision yet (M1.5).
-- The relay is tested against a fake compositor and lavapipe, never yet against a real
-  compositor or real dma-bufs (M1.4a's desktop run).
+- The relay's automated tests cover a fake compositor and lavapipe's shared memory only. Real
+  dma-bufs and a real compositor were exercised by hand, a few minutes, on Umbriel only. Its
+  checks follow wlroots 0.20: other compositors may refuse what wlroots accepts.
 - `tests/plane.rs`, the relay with the real mpv, runs only with `AERITH_TEST_WAYLAND=1`: it needs
   lavapipe, and Mesa is 1.12 GB to add to every shell and CI job.
 - The relay's fuzz target runs by hand (`.#fuzz`), not in `scripts/check.sh` or CI; adding a short
@@ -245,8 +251,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
   libwayland-client at run time, the player's included: the development shell sets
   `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
-- The relay passes neither mpv's opaque region nor its damage: Umbriel never scanned the video
-  out in either order. To fix before M1.4b compares the orders.
+- Umbriel never scanned the video out, in either order. The cause is not known: the relay passes
+  neither mpv's opaque region nor its damage, and its code assumes an opaque buffer format says
+  enough. To find before M1.4b compares the orders.
 - Through the relay, at 240 Hz, about 11 % of 23.976 fps frames lasted 9 or 11 refreshes rather
   than 10. Whether mpv alone does the same (its own pacing in MAILBOX, without fifo-v1) is
   M1.4b's to measure, against the cadence floor.
@@ -255,9 +262,23 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)); the owner weighs it.
 - mpv's window ready from the start costs 84 MiB while idle on the high tier; the lowest laptop is
   measured at M1.5.
+- The relay's thread wakes about 6 times for each frame of a 24 fps film (142 a second), with no
+  breakdown and no budget yet.
+- ADR-0015's "mpv is told the new size once it settles" is built without a timer: one size in
+  flight, the latest after it. An animated resize thus makes mpv draw at several sizes in turn;
+  morphs at Stage 3 may want a settle delay.
+- The relay bounds each wake-up in requests, not in bytes sent on the window's connection. Before
+  libwayland 1.23, a full buffer is a fatal error of the whole connection; the relay assumes 1.23 or
+  later, the version the system's winit loads.
+- No picture when mpv's Vulkan context fails after it connected, or when the compositor's
+  linux-dmabuf is older than version 4: mpv's OpenGL fallback cannot open a second connection
+  ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
+- The fuzz crate and the player's `fuzzing` feature are built by nothing in `scripts/check.sh` or
+  CI, and can break unnoticed. The 600 s run explored inputs of 198 bytes at most, about a dozen
+  messages.
 - `scripts/test-check.sh` copies `.git` with tar: in a git worktree, where `.git` is a file, its
   cases stage scratch files in the worktree's own index.
-- `scripts/check.sh` grew from 33 s to about two minutes: `scripts/test-check.sh` runs the whole
+- `scripts/check.sh` grew from 33 s to over three minutes: `scripts/test-check.sh` runs the whole
   test suite, `at_rest`'s 9 s included, in six of its copies. A lighter way for those copies is the
   owner's call ([figures](measurements.md#the-checks)).
 
