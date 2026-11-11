@@ -18,7 +18,8 @@
 //!
 //! **What mpv reports** comes from properties mpv is asked to observe: mpv sends them when they
 //! change, never at a fixed rate. The position is not observed, since it changes at every frame:
-//! it is read when its relation to time changes, and sent as a [`Clock`].
+//! it is read when its relation to time changes, and again every 10 s while it runs, with the
+//! rate mpv plays at, and sent as a [`Clock`].
 //!
 //! **Each open is numbered**, and mpv numbers the playlist entry each load makes: the events of a
 //! source carry the number of the open it came from, and each open ends with exactly one `Ended`,
@@ -39,7 +40,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command as Process, Stdio};
 use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -56,6 +57,11 @@ use crate::source::{Header, Kind, Source};
 const LARGEST_MESSAGE: u64 = 1 << 20;
 /// How long mpv may take to exit once asked, or once its connection broke, before it is killed.
 const GRACE: Duration = Duration::from_secs(2);
+/// How often a running clock is read again: it bounds the clock's drift against mpv's own
+/// position to a few milliseconds ([ADR-0016]).
+///
+/// [ADR-0016]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0016-the-clock-carries-the-engines-rate.md
+const READ_AGAIN: Duration = Duration::from_secs(10);
 
 /// The properties the report is made of.
 const REPORTED: [&str; 9] = [
@@ -191,12 +197,16 @@ impl Engine {
             .stderr(Stdio::null())
             .spawn()?;
         // The spawn closed our copy of mpv's end: when mpv ends, the reader sees the end at once.
-        Self::drive(ours, child)
+        Self::drive(ours, child, READ_AGAIN)
     }
 
-    /// Starts the threads that drive the engine `child` over `connection`. On failure, mpv is
-    /// ended: closing the connection makes it quit.
-    fn drive(connection: UnixStream, mut child: Child) -> io::Result<(Self, Receiver<Event>)> {
+    /// Starts the threads that drive the engine `child` over `connection`, reading a running clock
+    /// again every `read_again`. On failure, mpv is ended: closing the connection makes it quit.
+    fn drive(
+        connection: UnixStream,
+        mut child: Child,
+        read_again: Duration,
+    ) -> io::Result<(Self, Receiver<Event>)> {
         let abandon = |child: Option<&mut Child>, error| {
             let _ = connection.shutdown(Shutdown::Both);
             if let Some(child) = child {
@@ -222,7 +232,7 @@ impl Engine {
             Ok(reader) => reader,
             Err(error) => return abandon(Some(&mut child), error),
         };
-        let mut session = Session::new(writer, events);
+        let mut session = Session::new(writer, events, read_again);
         let thread = match thread::Builder::new()
             .name("aerith-mpv".to_owned())
             .spawn(move || session.run(&messages, &mut child, reader))
@@ -332,6 +342,8 @@ enum Pending {
     Command(&'static str),
     /// The load of an open, which answers with mpv's number for it.
     Load(OpenId),
+    /// A factor of the clock's rate, read just before the position of this open.
+    Rate { open: OpenId, factor: RateFactor },
     /// The position, for a [`Clock`] of this open.
     Position(OpenId),
     /// A property of the report, read for this open; the last of a reading sends the report.
@@ -342,6 +354,25 @@ enum Pending {
     },
     /// An answer nothing depends on: the setup, a stop.
     Ignored,
+}
+
+/// The two factors of a clock's rate, read from mpv.
+#[derive(Clone, Copy)]
+enum RateFactor {
+    /// `speed`: the speed asked of mpv.
+    Speed,
+    /// `video-speed-correction`: mpv's own change of speed to match the display, 1 unless it
+    /// syncs the video to the display.
+    Correction,
+}
+
+impl RateFactor {
+    fn property(self) -> &'static str {
+        match self {
+            Self::Speed => "speed",
+            Self::Correction => "video-speed-correction",
+        }
+    }
 }
 
 /// The engine thread's state.
@@ -362,6 +393,14 @@ struct Session {
     paused: Option<bool>,
     /// The clock last read for the current source.
     clock: Option<Clock>,
+    /// The factors of the rate of the clock being read, each 1 until mpv answers it.
+    speed: f64,
+    correction: f64,
+    /// How often a running clock is read again.
+    read_again: Duration,
+    /// When the clock is to be read again: set by each reading of a running clock, cleared when it
+    /// comes and when the source changes.
+    read_at: Option<Instant>,
     /// Whether mpv's playback is stopped: paused, seeking, waiting for data or idle.
     core_idle: bool,
     /// The values of [`REPORTED`] and `track-list` for the current source, by name.
@@ -373,7 +412,7 @@ struct Session {
 }
 
 impl Session {
-    fn new(connection: UnixStream, events: Sender<Event>) -> Self {
+    fn new(connection: UnixStream, events: Sender<Event>, read_again: Duration) -> Self {
         Self {
             connection,
             events,
@@ -385,6 +424,10 @@ impl Session {
             started: false,
             paused: None,
             clock: None,
+            speed: 1.0,
+            correction: 1.0,
+            read_again,
+            read_at: None,
             core_idle: true,
             properties: HashMap::new(),
             report: None,
@@ -403,7 +446,7 @@ impl Session {
             self.request(Pending::Ignored, json!(["observe_property", id, name]));
         }
         let ended = loop {
-            let Ok(message) = messages.recv() else {
+            let Some(message) = self.next_message(messages) else {
                 // Unreachable while the player holds its sender; mpv is ended all the same.
                 break reap(child);
             };
@@ -428,6 +471,26 @@ impl Session {
         let _ = self.connection.shutdown(Shutdown::Both);
         let _ = reader.join();
         ended
+    }
+
+    /// The next message, or `None` once the player's sender is gone. A running clock is read again
+    /// when its time comes; otherwise the thread sleeps until something arrives.
+    fn next_message(&mut self, messages: &Receiver<Message>) -> Option<Message> {
+        loop {
+            let Some(read_at) = self.read_at else {
+                return messages.recv().ok();
+            };
+            match messages.recv_timeout(read_at.saturating_duration_since(Instant::now())) {
+                Ok(message) => return Some(message),
+                Err(RecvTimeoutError::Disconnected) => return None,
+                Err(RecvTimeoutError::Timeout) => {
+                    // Once per reading: a frozen mpv that never answers is not asked again and
+                    // again.
+                    self.read_at = None;
+                    self.ask_position();
+                }
+            }
+        }
     }
 
     fn command(&mut self, command: Command) {
@@ -498,20 +561,30 @@ impl Session {
         }
     }
 
-    /// Asks for the current source's position, for a [`Clock`], unless a question for it is already
-    /// on its way: its answer comes after the change that prompted this one, and is read with the
-    /// state then.
+    /// Asks for the current source's position and its rate, for a [`Clock`], unless a question for
+    /// it is already on its way: its answer comes after the change that prompted this one, and is
+    /// read with the state then. mpv answers in the order it was asked, so the rate's factors come
+    /// before the position.
     fn ask_position(&mut self) {
         let Some(open) = self.current.filter(|_| self.started) else {
             return;
         };
-        if !self
+        if self
             .pending
             .values()
             .any(|p| matches!(p, Pending::Position(of) if *of == open))
         {
-            self.request(Pending::Position(open), json!(["get_property", "time-pos"]));
+            return;
         }
+        self.speed = 1.0;
+        self.correction = 1.0;
+        for factor in [RateFactor::Speed, RateFactor::Correction] {
+            self.request(
+                Pending::Rate { open, factor },
+                json!(["get_property", factor.property()]),
+            );
+        }
+        self.request(Pending::Position(open), json!(["get_property", "time-pos"]));
     }
 
     /// Reads every property the report and the picture's check are made of. mpv does not send
@@ -581,6 +654,15 @@ impl Session {
                     }
                 }
             }
+            // A factor mpv cannot give, as the correction without a picture, stays 1.
+            Some(Pending::Rate { open, factor }) if success && self.current == Some(open) => {
+                if let Some(value) = answer["data"].as_f64() {
+                    match factor {
+                        RateFactor::Speed => self.speed = value,
+                        RateFactor::Correction => self.correction = value,
+                    }
+                }
+            }
             Some(Pending::Position(open)) if success && self.current == Some(open) => {
                 if let Some(seconds) = answer["data"].as_f64() {
                     self.clock_read(open, seconds);
@@ -607,15 +689,21 @@ impl Session {
     /// Sends the clock read at `seconds` for `open`, unless it says nothing new: a stopped clock
     /// at the same position (a seek's restart after the change that stopped the clock).
     fn clock_read(&mut self, open: OpenId, seconds: f64) {
+        // mpv's values are finite and positive; anything else is read as real time.
+        let rate = Some(self.speed * self.correction)
+            .filter(|rate| rate.is_finite() && *rate > 0.0)
+            .unwrap_or(1.0);
         let clock = Clock {
             position: Duration::try_from_secs_f64(seconds.max(0.0)).unwrap_or_default(),
             at: Instant::now(),
             running: !self.core_idle,
+            rate,
         };
         let repeated = self
             .clock
             .is_some_and(|last| !last.running && !clock.running && last.position == clock.position);
         self.clock = Some(clock);
+        self.read_at = clock.running.then(|| clock.at + self.read_again);
         if !repeated {
             self.emit(Event::Clock(open, clock));
         }
@@ -644,6 +732,7 @@ impl Session {
                 self.started = false;
                 self.report = None;
                 self.clock = None;
+                self.read_at = None;
                 self.picture_failed = false;
                 self.properties.clear();
             }
@@ -665,6 +754,7 @@ impl Session {
                 if was_current {
                     self.current = None;
                     self.started = false;
+                    self.read_at = None;
                 }
                 if !(self.waiting.remove(&open) || was_current) {
                     return;
@@ -924,18 +1014,71 @@ mod tests {
             }
         }
 
-        /// Answers the question for the position with `seconds`.
+        /// Answers the question for the position with `seconds`, at mpv's own speed.
         fn position(&mut self, seconds: f64) {
+            self.position_at_rate(seconds, json!(1.0), json!(1.0));
+        }
+
+        /// Answers the questions for the clock: the speed, the correction (null: mpv cannot give
+        /// it) and the position.
+        fn position_at_rate(&mut self, seconds: f64, speed: Value, correction: Value) {
+            for (name, value) in [("speed", speed), ("video-speed-correction", correction)] {
+                let question = self.command();
+                assert_eq!(question["command"], json!(["get_property", name]));
+                if value.is_null() {
+                    self.answer(&question, "property unavailable", Value::Null);
+                } else {
+                    self.answer(&question, "success", value);
+                }
+            }
             let question = self.command();
             assert_eq!(question["command"], json!(["get_property", "time-pos"]));
             self.answer(&question, "success", json!(seconds));
         }
+
+        /// The clock's three questions, read and left unanswered.
+        fn clock_questions(&mut self) -> [Value; 3] {
+            ["speed", "video-speed-correction", "time-pos"].map(|name| {
+                let question = self.command();
+                assert_eq!(question["command"], json!(["get_property", name]));
+                question
+            })
+        }
+
+        /// Answers the clock's three questions: at mpv's own speed, at `seconds`.
+        fn answer_clock(&mut self, questions: &[Value; 3], seconds: f64) {
+            self.answer(&questions[0], "success", json!(1.0));
+            self.answer(&questions[1], "success", json!(1.0));
+            self.answer(&questions[2], "success", json!(seconds));
+        }
+
+        /// Fails if the engine sends a command within a moment. An absence is proven only as far
+        /// as this wait goes.
+        fn silent(&mut self, wait: Duration) {
+            self.reader.get_ref().set_read_timeout(Some(wait)).unwrap();
+            let mut line = String::new();
+            let read = self.reader.read_line(&mut line);
+            self.reader.get_ref().set_read_timeout(Some(WAIT)).unwrap();
+            assert!(
+                matches!(&read, Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+                "no command expected, got {read:?} {line}"
+            );
+        }
     }
 
-    /// An engine over a fake mpv, its setup answered. `child` stands for mpv's process.
+    /// An engine over a fake mpv, its setup answered. `child` stands for mpv's process. A running
+    /// clock is not read again within a test, but by [`driven_reading_every`].
     fn driven(child: Child) -> (Engine, Receiver<Event>, FakeMpv) {
+        driven_reading_every(child, Duration::from_secs(3600))
+    }
+
+    /// An engine over a fake mpv that reads a running clock again every `read_again`.
+    fn driven_reading_every(
+        child: Child,
+        read_again: Duration,
+    ) -> (Engine, Receiver<Event>, FakeMpv) {
         let (ours, theirs) = UnixStream::pair().unwrap();
-        let (engine, events) = Engine::drive(ours, child).unwrap();
+        let (engine, events) = Engine::drive(ours, child, read_again).unwrap();
         let mut mpv = FakeMpv::new(theirs);
         for name in OBSERVED {
             let command = mpv.accept();
@@ -1270,8 +1413,9 @@ mod tests {
         mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
         mpv.send(json!({"event": "playback-restart"}));
         assert_eq!(next(&events), Event::Started(first));
-        // The first source's report and position are asked and left unanswered.
-        for _ in 0..=REPORTED.len() + 1 {
+        // The first source's report and clock are asked and left unanswered: the report's
+        // properties, the track list, and the clock's three questions.
+        for _ in 0..REPORTED.len() + 4 {
             mpv.command();
         }
         let second = engine.open(file("/b.mkv")).unwrap();
@@ -1335,6 +1479,52 @@ mod tests {
             mpv.send(json!({"event": "start-file", "playlist_entry_id": entry}));
         }
         quiet(&events);
+    }
+
+    #[test]
+    fn a_clock_carries_mpvs_speed_times_its_correction() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = start(&engine, &mut mpv, &events, 1, &json!({}));
+        mpv.property("core-idle", json!(true));
+        mpv.position_at_rate(5.0, json!(1.0), json!(0.99317));
+        let Event::Clock(of, clock) = next(&events) else {
+            panic!("a clock expected");
+        };
+        assert_eq!(of, open);
+        assert!((clock.rate - 0.99317).abs() < 1e-12, "{clock:?}");
+        // Without a picture mpv has no correction, and a speed it cannot give is not trusted: the
+        // clock runs at real time.
+        mpv.property("core-idle", json!(false));
+        mpv.position_at_rate(6.0, json!(-3.0), Value::Null);
+        let Event::Clock(_, clock) = next(&events) else {
+            panic!("a clock expected");
+        };
+        assert!(clock.running);
+        assert_eq!(clock.rate, 1.0);
+    }
+
+    #[test]
+    fn a_running_clock_is_read_again_and_a_stopped_one_is_not() {
+        let read_again = Duration::from_millis(100);
+        let (engine, events, mut mpv) = driven_reading_every(exited(), read_again);
+        let open = start(&engine, &mut mpv, &events, 1, &json!({}));
+        // The clock runs: after `read_again`, the engine asks again, and sends the new reading.
+        mpv.position_at_rate(1.0, json!(1.0), json!(1.001067));
+        let Event::Clock(of, clock) = next(&events) else {
+            panic!("a clock expected");
+        };
+        assert_eq!(of, open);
+        assert!(clock.running && (clock.rate - 1.001067).abs() < 1e-12);
+        // A reading left unanswered, as a frozen mpv would leave it, is not asked again.
+        let questions = mpv.clock_questions();
+        mpv.silent(read_again * 5);
+        mpv.answer_clock(&questions, 2.0);
+        assert!(matches!(next(&events), Event::Clock(_, c) if c.running));
+        // Paused, the clock stops, and nothing is asked any more.
+        mpv.property("core-idle", json!(true));
+        mpv.position(2.5);
+        assert!(matches!(next(&events), Event::Clock(_, c) if !c.running));
+        mpv.silent(read_again * 5);
     }
 
     #[test]
@@ -1424,11 +1614,11 @@ mod tests {
         let (engine, events, mut mpv) = driven(exited());
         start(&engine, &mut mpv, &events, 1, &json!({}));
         mpv.property("core-idle", json!(true));
-        let question = mpv.command();
+        let questions = mpv.clock_questions();
         // A seek's restart while the question is on its way asks nothing more.
         mpv.send(json!({"event": "playback-restart"}));
         mpv.property("core-idle", json!(false));
-        mpv.answer(&question, "success", json!(4.0));
+        mpv.answer_clock(&questions, 4.0);
         assert!(
             matches!(next(&events), Event::Clock(_, c) if c.running),
             "read with the state when the answer came"
@@ -1444,10 +1634,10 @@ mod tests {
         let (engine, events, mut mpv) = driven(exited());
         let open = start(&engine, &mut mpv, &events, 1, &json!({}));
         mpv.property("core-idle", json!(true));
-        let question = mpv.command();
+        let questions = mpv.clock_questions();
         mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "eof"}));
         assert_eq!(next(&events), Event::Ended(open, Ending::Finished));
-        mpv.answer(&question, "success", json!(9.0));
+        mpv.answer_clock(&questions, 9.0);
         quiet(&events);
     }
 
@@ -1581,7 +1771,7 @@ mod tests {
     fn an_mpv_that_ends_without_reading_what_it_was_sent_closed_its_connection() {
         // The fake leaves the setup unread and closes: its end drops what it holds, a reset.
         let (ours, theirs) = UnixStream::pair().unwrap();
-        let (_engine, events) = Engine::drive(ours, exited()).unwrap();
+        let (_engine, events) = Engine::drive(ours, exited(), READ_AGAIN).unwrap();
         thread::sleep(Duration::from_millis(100));
         drop(theirs);
         let Event::EngineFailed(reason) = next(&events) else {
@@ -1623,7 +1813,7 @@ mod tests {
             .stdout(Stdio::null())
             .spawn()
             .unwrap();
-        let (_engine, events) = Engine::drive(ours, child).unwrap();
+        let (_engine, events) = Engine::drive(ours, child, READ_AGAIN).unwrap();
         writer.write_all(b"{\"event\": nope}\n").unwrap();
         let Event::EngineFailed(reason) = next(&events) else {
             panic!("a failure")
@@ -1679,7 +1869,7 @@ mod tests {
             .stdout(Stdio::null())
             .spawn()
             .unwrap();
-        let (mut engine, events) = Engine::drive(ours, child).unwrap();
+        let (mut engine, events) = Engine::drive(ours, child, READ_AGAIN).unwrap();
         assert_eq!(
             engine.close().as_deref(),
             Some("exited with code 0"),

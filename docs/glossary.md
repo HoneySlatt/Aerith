@@ -5,9 +5,11 @@ The terms Aerith coins or uses in a sense of its own.
 - **`aerith-player`**: the one interface through which the rest of Aerith drives playback, whatever
   the engine ([ADR-0004](adr/0004-a-player-engine-per-platform.md)).
 - **Engine**: what decodes and presents the video on a platform: mpv, Media3 or AVFoundation.
-- **Clock**: the position the player sends when its relation to time changes, with the instant it
-  was read and whether it runs, from which the interface computes the position at any moment
-  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
+- **Clock**: the position the player sends when its relation to time changes, and every 10 s while
+  it runs, with the instant it was read, whether it runs and its rate, from which the interface
+  computes the position at any moment
+  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md),
+  [ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md)).
 - **Report**: what the engine says it decodes and outputs (decoder, colours, sound sent), as the
   player sends it.
 - **Video plane**: the surface or system view where the engine presents the video, below the

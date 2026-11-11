@@ -40,7 +40,9 @@ caller ◀── Event (Started, Clock, Report…) ─────────�
   in the same inbox. The engine thread turns them into events on the caller's channel.
 - Each `open` is numbered; the engine thread matches mpv's number for the playlist entry each
   load makes to it, and the events of a source carry the open's number.
-- Both threads sleep until something arrives: a paused or idle player wakes nothing up.
+- Both threads sleep until something arrives: a paused or idle player wakes nothing up. While a
+  source plays, the engine thread also wakes every 10 s to read the clock again
+  ([ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md)).
 - When mpv ends, the reader sees the connection close; the engine thread reaps mpv and sends
   `EngineFailed`. When the player is dropped, it closes the connection; mpv quits.
 

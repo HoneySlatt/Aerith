@@ -55,21 +55,28 @@ pub struct Clock {
     pub position: Duration,
     /// When the engine answered.
     pub at: Instant,
-    /// Whether the position advances in real time from `at`. It does not while paused, while
-    /// seeking, or while a stream waits for data.
+    /// Whether the position advances from `at`. It does not while paused, while seeking, or while
+    /// a stream waits for data.
     pub running: bool,
+    /// How many seconds of the source pass in one second of real time while the clock runs: the
+    /// engine's speed, times its own correction when it matches the video to the display. Always
+    /// finite and above zero.
+    pub rate: f64,
 }
 
 impl Clock {
     /// The position at `now`, assuming playback ran as the clock said since `at`. Accurate to the
-    /// engine's own drift against the system clock, until the next [`Event::Clock`].
+    /// engine's own drift against the system clock, until the next [`Event::Clock`]: the player
+    /// reads the clock again every 10 s while it runs ([ADR-0016]).
+    ///
+    /// [ADR-0016]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0016-the-clock-carries-the-engines-rate.md
     pub fn position_at(&self, now: Instant) -> Duration {
-        if self.running {
-            self.position
-                .saturating_add(now.saturating_duration_since(self.at))
-        } else {
-            self.position
+        if !self.running {
+            return self.position;
         }
+        let elapsed = now.saturating_duration_since(self.at).as_secs_f64() * self.rate;
+        let advanced = Duration::try_from_secs_f64(elapsed).unwrap_or(Duration::MAX);
+        self.position.saturating_add(advanced)
     }
 }
 
@@ -162,6 +169,7 @@ mod tests {
             position: Duration::MAX,
             at,
             running: true,
+            rate: 1.0,
         };
         assert_eq!(
             clock.position_at(at + Duration::from_secs(3600)),
@@ -176,6 +184,7 @@ mod tests {
             position: Duration::from_secs(10),
             at,
             running: true,
+            rate: 1.0,
         };
         let later = at + Duration::from_millis(1500);
         assert_eq!(running.position_at(later), Duration::from_millis(11_500));
@@ -186,5 +195,27 @@ mod tests {
             ..running
         };
         assert_eq!(stopped.position_at(later), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_running_clock_advances_at_its_rate() {
+        let at = Instant::now();
+        // mpv's correction for a 25 fps film on a 240 Hz display (docs/measurements.md).
+        let slowed = Clock {
+            position: Duration::from_secs(10),
+            at,
+            running: true,
+            rate: 0.99317,
+        };
+        assert_eq!(
+            slowed.position_at(at + Duration::from_secs(100)),
+            Duration::from_secs_f64(10.0 + 99.317)
+        );
+        // A rate that overflows saturates rather than panics.
+        let huge = Clock {
+            rate: f64::MAX,
+            ..slowed
+        };
+        assert_eq!(huge.position_at(at + Duration::from_secs(1)), Duration::MAX);
     }
 }

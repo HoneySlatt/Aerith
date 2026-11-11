@@ -210,9 +210,6 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   in reach: the separate process isolates crashes, not tokens. Due before Stage 2 stores a token:
   run mpv in a sandbox, as its tests do, with no bus, no home but its cache, and the network only
   for its stream ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-- The clock is not read again while playing: with mpv matching the display's rate, it drifts by
-  up to 0.7 %. [ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md) decides the fix;
-  M1.4a builds it.
 - `reap` polls every 10 ms, up to 2 s, when mpv ends or is closed; a crash or a close only.
 - A source that is a playlist is stopped, but mpv may start fetching its first entry, without the
   source's headers, before the stop arrives
