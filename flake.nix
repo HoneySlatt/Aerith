@@ -83,6 +83,8 @@
         # load it: the rivals are large and need a display.
         bench = pkgs.mkShell {
           inputsFrom = [ default ];
+          # `inputsFrom` carries the default shell's packages, not its variables.
+          inherit (default) LD_LIBRARY_PATH AERITH_TEST_MPV;
           packages = [
             # The corpus: FFmpeg with x264 and x265 encodes it, dovi_tool and hdr10plus_tool add the
             # dynamic metadata, mkvtoolnix muxes, jq writes the HDR10+ metadata, curl fetches the
