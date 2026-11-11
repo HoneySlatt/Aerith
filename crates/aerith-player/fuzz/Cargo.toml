@@ -1,0 +1,35 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
+# the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# The relay's fuzz target, for cargo-fuzz, which needs a nightly compiler: `nix develop .#fuzz`,
+# then `cargo fuzz run relay` from crates/aerith-player (CONTRIBUTING.md). A workspace of its own,
+# out of Aerith's: nothing here builds what users run.
+[package]
+name = "aerith-player-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# libFuzzer, with cargo-fuzz's glue.
+libfuzzer-sys = "0.4"
+aerith-player = { path = "..", features = ["fuzzing"] }
+# The fake compositor of the player's tests (tests/common/host.rs) and the relay's own versions.
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-server = { version = "0.31", default-features = false }
+wayland-protocols = { version = "0.32", features = ["client", "server", "staging", "unstable"] }
+raw-window-handle = "0.6"
+rustix = { version = "1.1.6", features = ["event", "fs", "net"] }
+
+[[bin]]
+name = "relay"
+path = "fuzz_targets/relay.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

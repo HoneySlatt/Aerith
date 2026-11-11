@@ -221,7 +221,7 @@ fn every_clip_of_the_corpus_opens_seeks_plays_and_stops() {
 
 /// The options `src/mpv.rs` gives mpv, but its IPC and its caches, written again here: the
 /// player keeps them private. Keep the two lists in step.
-const PLAYER_OPTIONS: [&str; 19] = [
+const PLAYER_OPTIONS: [&str; 20] = [
     "--resume-playback=no",
     "--save-position-on-quit=no",
     "--load-scripts=no",
@@ -240,6 +240,7 @@ const PLAYER_OPTIONS: [&str; 19] = [
     "--input-builtin-drag-and-drop=no",
     "--input-vo-keyboard=no",
     "--input-media-keys=no",
+    "--clipboard-backends-clr",
     "--title=Aerith",
 ];
 

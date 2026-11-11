@@ -23,13 +23,19 @@ It holds:
 - `bwrap` (bubblewrap), the bench's sandbox, which its tests and the player's run. It needs
   unprivileged user namespaces; CI's Ubuntu runner turns them on first;
 - mpv, which the player's tests drive, named by `AERITH_TEST_MPV`: the same build as the bench's
-  mpv, without its wrapper.
+  mpv, without its wrapper;
+- `pkg-config` and libwayland, with which the player's relay links `libwayland-client`.
 
 The first entry downloads the toolchain, about 150 MB, and mpv with what it needs: 752 MiB once
 unpacked, shared in part with the rest.
 
 The bench has a shell of its own, `nix develop .#bench`: the default shell's tools, plus what makes
 the test corpus and the rivals the bench measures ([below](#the-bench)). CI does not load it.
+
+The player's fuzz target has one too, `nix develop .#fuzz`: a nightly Rust pinned by date
+(2026-11-10), which cargo-fuzz needs and which builds nothing that users run
+([ADR-0011](docs/adr/0011-a-pinned-stable-toolchain.md)), and cargo-fuzz
+([below](#the-relays-fuzz-target)). CI does not load it.
 
 Without Nix, rustup reads `rust-toolchain.toml` and installs the same toolchain; `cargo deny`,
 `lychee`, `bwrap` and mpv are then yours to install, and `AERITH_TEST_MPV` yours to set. CI's
@@ -51,12 +57,33 @@ cargo test --workspace
 `cargo test -p aerith-player` runs three kinds of test
 ([ADR-0014](docs/adr/0014-the-player-interface-and-mpvs-connection.md)):
 
-- in `src/`, against a fake mpv: every event, error and limit, on Linux;
+- in `src/`, against a fake mpv: every event, error and limit, on Linux. The relay's
+  (`src/relay/tests.rs`) run between a fake compositor, `tests/common/host.rs`, which the
+  interface's own connection reaches, and a fake mpv on the relay's socket: the plane's surface,
+  mpv's frames reaching it, place, hide and show, close, and each check and ceiling ending mpv's
+  connection while the interface's still answers. The fake compositor raises the protocol errors
+  wlroots 0.20 raises on what the relay sends, at each request and at each commit, so that a
+  request of the relay's that the compositor would refuse fails the test;
 - in `tests/mpv.rs` and `tests/at_rest.rs`, against the real mpv that `AERITH_TEST_MPV` names, on
   clips mpv makes itself. Each mpv runs in bubblewrap with a home of the test's own; the sound
   devices and the session's runtime folders (its compositor, sound server and bus) are hidden; the
-  picture and the sound are discarded. `at_rest` checks that a
-  paused or stopped player wakes none of Aerith's threads;
+  sound is discarded. `tests/mpv.rs` discards the picture. `at_rest` shows it in a plane of the
+  fake compositor's window, and checks that a paused or stopped player wakes none of Aerith's
+  threads, the relay's included. There mpv draws with lavapipe, Mesa's Vulkan driver on the CPU,
+  when the machine has it (below); elsewhere, as in CI, mpv's video output fails and the relay
+  serves no frame;
+- in `tests/plane.rs`, the real mpv drawing into the plane with lavapipe: its frames reach the
+  fake compositor; mpv draws no frame while the plane is hidden, as the relay counts what mpv
+  commits; mpv quits once the plane is closed; and a crash of mpv leaves the window's connection
+  whole. The development shell does not hold Mesa, whose closure is about 1.1 GB: these tests are
+  ignored unless `AERITH_TEST_WAYLAND=1` is set when they are built.
+  `AERITH_TEST_LAVAPIPE` names lavapipe's JSON file; NixOS's own,
+  `/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json`, is used without it:
+
+```sh
+AERITH_TEST_WAYLAND=1 cargo test -p aerith-player --test plane
+```
+
 - in `tests/corpus.rs`, on the whole corpus ([below](#the-corpus)), ignored unless asked for:
 
 ```sh
@@ -74,16 +101,34 @@ runs each. The options are written again in the test: keep them in step with `sr
 ### Playing a file
 
 ```sh
-cargo run --release -p aerith-player --example play -- <file or URL> [--window] [--sound] \
+cargo run --release -p aerith-player --example play -- <file or URL> [--sound] \
     [--seconds N] [--header "Name: value"]...
 ```
 
 plays a file or a stream through the player and prints each event, with the time since it was
-opened, a second after the player started. By default nothing is shown or heard. `--window` shows
-the picture in mpv's own window, on a Wayland session; `--sound` plays the sound aloud. It runs the
-`mpv` of `PATH`, or the program `--mpv` names, with your own home: mpv writes nothing there itself,
-but with `--window` the GPU's driver keeps its shader cache under `~/.cache`, as for any program
-that draws. Play test clips only.
+opened, a second after the player started. The picture is discarded: showing it needs a window of
+an interface's, and the test interface, `aerith-testbed`
+([ADR-0017](docs/adr/0017-a-test-interface-on-winit-and-wgpu.md)), does not exist yet.
+`--sound` plays the sound aloud. It runs the `mpv` of `PATH`, or the program `--mpv` names, with
+your own home: mpv writes nothing there itself. Play test clips only.
+
+### The relay's fuzz target
+
+`crates/aerith-player/fuzz/` holds the fuzz target of the relay's side facing mpv, for cargo-fuzz
+and libFuzzer, in a workspace of its own. Each input is a session: the fake compositor of the
+player's tests and an interface on it, the relay on the interface's window, and a fake mpv that
+makes what mpv makes at its start, then sends the input as Wayland messages to any object, with
+any arguments and file descriptors, between the interface's own changes of the plane. A panic in
+any thread, a session that never ends, or an error of the fake compositor's on the interface's
+connection is a crash. From `crates/aerith-player`:
+
+```sh
+nix develop ../..#fuzz
+cargo fuzz run relay -- -max_total_time=600 -timeout=10
+```
+
+It writes what it finds under `fuzz/corpus` and `fuzz/artifacts`, which git ignores. A crash is
+replayed with `cargo fuzz run relay <file>`. Neither `scripts/check.sh` nor CI runs it yet.
 
 ## The checks
 

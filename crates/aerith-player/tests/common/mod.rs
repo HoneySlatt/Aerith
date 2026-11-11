@@ -15,6 +15,8 @@
     reason = "each test binary uses its own part of these helpers"
 )]
 
+pub mod host;
+
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -28,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aerith_player::{Audio, Event, Settings, Video};
+use aerith_player::{Audio, Event, Settings, Video, Window};
 
 /// How long the tests wait for an event before they fail.
 pub const WAIT: Duration = Duration::from_secs(20);
@@ -57,6 +59,41 @@ impl TestDir {
     /// The sandboxed mpv's command: a script that starts the real one through bubblewrap, `readable`
     /// bound back read-only over the replaced home.
     pub fn mpv(&self, readable: &[&Path]) -> PathBuf {
+        self.sandboxed_mpv(readable, &[], &[])
+    }
+
+    /// The sandboxed mpv, drawing on the CPU: Vulkan sees lavapipe only ([`lavapipe`]), or no
+    /// driver at all on a machine without it, and mpv accepts a software device. Only Vulkan is
+    /// tried, so that the result does not depend on the machine's OpenGL drivers.
+    pub fn mpv_drawing_on_the_cpu(&self, readable: &[&Path]) -> PathBuf {
+        let driver = lavapipe().unwrap_or_else(|| PathBuf::from("/nonexistent/lavapipe.json"));
+        let driver = driver.display().to_string();
+        self.sandboxed_mpv(
+            readable,
+            &[("VK_DRIVER_FILES", driver.as_str())],
+            &["--gpu-sw=yes", "--gpu-context=waylandvk"],
+        )
+    }
+
+    /// Settings that show the picture in a plane of `window`, drawn on the CPU, the sound
+    /// discarded.
+    pub fn plane_settings(&self, window: Window, readable: &[&Path]) -> Settings {
+        Settings {
+            engine: self.mpv_drawing_on_the_cpu(readable),
+            video: Video::Plane(window),
+            audio: Audio::Discarded,
+            cache: self.root.join("cache"),
+        }
+    }
+
+    /// The sandboxed mpv, with `environment` set inside the sandbox and `options` after the
+    /// player's own, which they override.
+    fn sandboxed_mpv(
+        &self,
+        readable: &[&Path],
+        environment: &[(&str, &str)],
+        options: &[&str],
+    ) -> PathBuf {
         let mpv = std::env::var("AERITH_TEST_MPV")
             .expect("AERITH_TEST_MPV names the mpv to test; run inside `nix develop`");
         let home = std::env::var("HOME").expect("HOME is set");
@@ -109,12 +146,21 @@ impl TestDir {
         ] {
             arguments.extend(["--unsetenv".to_owned(), variable.to_owned()]);
         }
+        for (variable, value) in environment {
+            arguments.extend(["--setenv", variable, value].map(str::to_owned));
+        }
         arguments.extend(["--die-with-parent", "--", &mpv].map(str::to_owned));
         let line: Vec<String> = arguments.iter().map(|a| quoted(a)).collect();
+        // After the player's own options: mpv takes the last value of an option.
+        let options: Vec<String> = options.iter().map(|option| quoted(option)).collect();
         let draft = self.root.join("mpv.draft");
         fs::write(
             &draft,
-            format!("#!/bin/sh\nexec bwrap {} \"$@\"\n", line.join(" ")),
+            format!(
+                "#!/bin/sh\nexec bwrap {} \"$@\" {}\n",
+                line.join(" "),
+                options.join(" ")
+            ),
         )
         .unwrap();
         // Copied by another program: a file this process opens for writing could be inherited,
@@ -205,6 +251,20 @@ impl Drop for TestDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+/// lavapipe, Mesa's Vulkan driver on the CPU, as the Vulkan loader names it: the file
+/// `AERITH_TEST_LAVAPIPE` names, or NixOS's own if it has one. The development shell does not hold
+/// Mesa: with its closure, about 1.1 GB, every shell and CI job would download it.
+pub fn lavapipe() -> Option<PathBuf> {
+    std::env::var_os("AERITH_TEST_LAVAPIPE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            Some(PathBuf::from(
+                "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json",
+            ))
+        })
+        .filter(|path| path.is_file())
 }
 
 /// `text` quoted for the shell.

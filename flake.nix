@@ -49,10 +49,25 @@
             # The bench's sandbox (ADR-0013), which its tests exercise, and aerith-player's tests
             # too.
             pkgs.bubblewrap
+            # aerith-player's relay links libwayland-client (ADR-0015), found through pkg-config.
+            pkgs.pkg-config
           ];
+          buildInputs = [ pkgs.wayland ];
           # The mpv aerith-player's tests drive: the same build as the bench's mpv, without the
           # wrapper that adds yt-dlp, which the player never loads.
           AERITH_TEST_MPV = "${pkgs.mpv-unwrapped}/bin/mpv";
+        };
+
+        # The fuzzing shell: `nix develop .#fuzz`, for aerith-player's fuzz target (its `fuzz/`
+        # folder). cargo-fuzz needs a nightly compiler: one pinned by date, which builds nothing that
+        # users run, and only here, so that the default shell and CI do not download it (ADR-0011).
+        fuzz = pkgs.mkShell {
+          packages = [
+            (pkgs.rust-bin.nightly."2026-11-10".minimal)
+            pkgs.cargo-fuzz
+            pkgs.pkg-config
+          ];
+          buildInputs = [ pkgs.wayland ];
         };
 
         # The bench's shell: `nix develop .#bench`. Everything the default shell holds, plus what

@@ -6,14 +6,14 @@
 //! to the first frame.
 //!
 //! ```text
-//! cargo run --release -p aerith-player --example play -- <file or URL> [--window] [--sound]
+//! cargo run --release -p aerith-player --example play -- <file or URL> [--sound]
 //!     [--seconds N] [--mpv PROGRAM] [--header "Name: value"]...
 //! ```
 //!
-//! By default the picture and the sound are discarded, and nothing is shown or heard. `--window`
-//! shows the picture in mpv's own window on the Wayland session; `--sound` plays the sound. The
-//! player stops after `--seconds`, 10 by default. mpv's shader cache goes to a fresh folder under
-//! the system's temporary folder, removed at the end.
+//! The picture is discarded: showing it needs a window of an interface's, and the test interface,
+//! `aerith-testbed` (ADR-0017), does not exist yet. By default the sound is discarded too, and
+//! nothing is heard; `--sound` plays it. The player stops after `--seconds`, 10 by default. mpv's shader
+//! cache goes to a fresh folder under the system's temporary folder, removed at the end.
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,13 +23,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut arguments = std::env::args().skip(1);
     let mut target = None;
-    let (mut video, mut audio) = (Video::Discarded, Audio::Discarded);
+    let mut audio = Audio::Discarded;
     let mut seconds = 10.0;
     let mut engine = "mpv".to_owned();
     let mut headers = Vec::new();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
-            "--window" => video = Video::Window,
             "--sound" => audio = Audio::System,
             "--seconds" => seconds = arguments.next().ok_or("--seconds needs a value")?.parse()?,
             "--mpv" => engine = arguments.next().ok_or("--mpv needs a program")?,
@@ -42,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => return Err(format!("unexpected argument {argument}").into()),
         }
     }
-    let target = target.ok_or("usage: play <file or URL> [--window] [--sound] [--seconds N]")?;
+    let target = target.ok_or("usage: play <file or URL> [--sound] [--seconds N]")?;
     let source = if target.starts_with("http://") || target.starts_with("https://") {
         Source::stream(target, headers)?
     } else {
@@ -51,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache = std::env::temp_dir().join(format!("aerith-player-play-{}", std::process::id()));
     let settings = Settings {
         engine: engine.into(),
-        video,
+        video: Video::Discarded,
         audio,
         cache: cache.clone(),
     };

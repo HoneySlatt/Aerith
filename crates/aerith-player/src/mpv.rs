@@ -35,9 +35,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command as Process, Stdio};
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -49,7 +49,9 @@ use serde_json::{Value, json};
 use crate::event::{
     AudioFormat, AudioReport, Clock, Colour, Ending, Event, OpenId, Report, VideoReport,
 };
+use crate::plane::Plane;
 use crate::player::{Audio, Command, EngineGone, Settings, Video};
+use crate::relay::Relay;
 use crate::source::{Header, Kind, Source};
 
 /// The largest message accepted from mpv, in bytes. Its messages are a few hundred bytes; a larger
@@ -120,6 +122,9 @@ fn arguments(settings: &Settings) -> Vec<OsString> {
         "--input-builtin-drag-and-drop=no",
         "--input-vo-keyboard=no",
         "--input-media-keys=no",
+        // Nor mpv's clipboard, which is the person's: on Wayland its backend would also open a
+        // connection of its own before the video output, and take the relay's socket from it.
+        "--clipboard-backends-clr",
         // Nothing read from or written to the terminal: standard input is the IPC.
         "--terminal=no",
         "--input-ipc-client=fd://0",
@@ -141,13 +146,17 @@ fn arguments(settings: &Settings) -> Vec<OsString> {
     }
     match settings.video {
         Video::Discarded => arguments.push("--vo=null".into()),
-        Video::Window => arguments.extend(
+        Video::Plane(_) => arguments.extend(
             [
                 "--vo=gpu-next",
                 // Wayland only: never mpv's DRM or direct-display contexts, which would take the
                 // screen from the compositor when Wayland fails.
                 "--gpu-context=waylandvk,wayland",
                 "--hwdec=auto-safe",
+                // The window and the video output are made at start, ready before the first open.
+                "--force-window=yes",
+                // The pointer is the interface's.
+                "--input-cursor-passthrough=yes",
             ]
             .map(OsString::from),
         ),
@@ -172,6 +181,9 @@ enum Message {
 
 /// The running engine, as the player holds it.
 pub(crate) struct Engine {
+    /// The plane mpv's picture shows in, if any. Declared first, it is closed after mpv has quit
+    /// (`Drop` closes mpv before the fields drop): mpv never sees its window vanish while it runs.
+    plane: Option<Plane>,
     inbox: Sender<Message>,
     /// The number of the last open. Locked while an open is numbered and sent, so that opens made
     /// from several threads reach the engine thread in the order of their numbers.
@@ -183,21 +195,44 @@ pub(crate) struct Engine {
 }
 
 impl Engine {
-    /// Starts mpv as `settings` say and the threads that drive it.
+    /// Starts mpv as `settings` say and the threads that drive it, and, for a plane, the relay
+    /// mpv's Wayland connection goes through.
     pub(crate) fn start(settings: &Settings) -> io::Result<(Self, Receiver<Event>)> {
         let (ours, theirs) = UnixStream::pair()?;
         // The GPU driver's own shader caches go to Aerith's folder too, not the person's home.
         let driver_cache = settings.cache.join("driver");
-        let child = Process::new(&settings.engine)
+        let mut process = Process::new(&settings.engine);
+        process
             .args(arguments(settings))
             .env("MESA_SHADER_CACHE_DIR", &driver_cache)
             .env("__GL_SHADER_DISK_CACHE_PATH", &driver_cache)
             .stdin(Stdio::from(OwnedFd::from(theirs)))
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::null());
+        let wayland = match settings.video {
+            Video::Discarded => None,
+            Video::Plane(window) => {
+                let (relay_end, mpv_end) = UnixStream::pair()?;
+                inherit_wayland_socket(&mut process, &mpv_end)?;
+                Some((window, relay_end, mpv_end))
+            }
+        };
+        let child = process.spawn()?;
         // The spawn closed our copy of mpv's end: when mpv ends, the reader sees the end at once.
-        Self::drive(ours, child, READ_AGAIN)
+        let (mut engine, events) = Self::drive(ours, child, READ_AGAIN)?;
+        if let Some((window, relay_end, mpv_end)) = wayland {
+            // mpv holds its end now; the relay sees mpv's connection close when mpv ends.
+            drop(mpv_end);
+            let failed = relay_failure(engine.inbox.clone());
+            // A relay that cannot start ends the engine with it: dropping it ends mpv.
+            engine.plane = Some(Plane::new(Relay::start(window, relay_end, failed)?));
+        }
+        Ok((engine, events))
+    }
+
+    /// The plane mpv's picture shows in, if any.
+    pub(crate) fn plane(&self) -> Option<&Plane> {
+        self.plane.as_ref()
     }
 
     /// Starts the threads that drive the engine `child` over `connection`, reading a running clock
@@ -243,6 +278,7 @@ impl Engine {
         };
         Ok((
             Self {
+                plane: None,
                 inbox,
                 opens: Mutex::new(0),
                 connection,
@@ -287,6 +323,58 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// What the relay calls when it ends mpv's Wayland connection, or loses the window's: the engine
+/// ends mpv as it does when its IPC breaks, and reports the relay's reason. mpv may not quit by
+/// itself when its Wayland connection ends.
+fn relay_failure(inbox: Sender<Message>) -> Box<dyn Fn(String) + Send> {
+    Box::new(move |reason| {
+        let _ = inbox.send(Message::Disconnected(reason));
+    })
+}
+
+/// Where mpv is told the compositor is, besides its inherited socket: a path that cannot exist, as
+/// `/dev/null` is no folder. libwayland unsets `WAYLAND_SOCKET` once it took it; a second
+/// connection of mpv's then looks at `WAYLAND_DISPLAY`, and without it would try the session's
+/// compositor at `$XDG_RUNTIME_DIR/wayland-0`. With this path it fails at once.
+///
+/// mpv's `wayland` context, its fallback after `waylandvk`, makes such a second connection when
+/// Vulkan fails after connecting (no device libplacebo takes, a swapchain refused): that fallback
+/// then fails too, and mpv shows nothing rather than open a window of its own. When Vulkan fails
+/// before connecting (no Vulkan driver at all, as on older GPUs), the fallback takes the inherited
+/// socket and draws through the relay with OpenGL.
+const NO_COMPOSITOR: &str = "/dev/null/no-compositor";
+
+/// Has mpv inherit `socket` as its Wayland connection, `WAYLAND_SOCKET`, which libwayland takes
+/// before any other way to connect. mpv is told of no other compositor: `WAYLAND_DISPLAY` names
+/// [`NO_COMPOSITOR`], and `DISPLAY` is removed.
+fn inherit_wayland_socket(process: &mut Process, socket: &UnixStream) -> io::Result<()> {
+    // A descriptor above the standard three, which the spawn sets up for mpv: the socket keeps its
+    // number in mpv.
+    let inherited: OwnedFd = rustix::io::fcntl_dupfd_cloexec(socket, 3)?;
+    let number = inherited.as_raw_fd();
+    process
+        .env("WAYLAND_SOCKET", number.to_string())
+        .env("WAYLAND_DISPLAY", NO_COMPOSITOR)
+        .env_remove("DISPLAY");
+    let keep_across_exec = move || -> io::Result<()> {
+        // The closure owns `inherited`: it stays open in the parent until the spawn is done, and
+        // so in the child the fork makes.
+        let _ = &inherited;
+        // SAFETY: `number` is `inherited`'s, open in this process, as said above, until exec;
+        // the borrow ends before.
+        let socket = unsafe { BorrowedFd::borrow_raw(number) };
+        rustix::io::fcntl_setfd(socket, rustix::io::FdFlags::empty())?;
+        Ok(())
+    };
+    // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
+    // calls are allowed: it makes one `fcntl` system call, through rustix's raw system calls,
+    // which neither allocate nor lock.
+    unsafe {
+        process.pre_exec(keep_across_exec);
+    }
+    Ok(())
 }
 
 /// Reads mpv's messages, one JSON value a line, and hands them to the engine thread until the
@@ -1168,9 +1256,25 @@ mod tests {
         }
     }
 
+    /// A plane's settings, for mpv's arguments only: its window is never used.
+    fn plane() -> Video {
+        use raw_window_handle::{WaylandDisplayHandle, WaylandWindowHandle};
+        let nowhere = std::ptr::NonNull::dangling();
+        // SAFETY: no relay starts from this window, so nothing reaches through its addresses:
+        // only mpv's arguments are made from the settings it is in.
+        let window = unsafe {
+            crate::plane::Window::new(
+                WaylandDisplayHandle::new(nowhere),
+                WaylandWindowHandle::new(nowhere),
+                WaylandWindowHandle::new(nowhere),
+            )
+        };
+        Video::Plane(window)
+    }
+
     #[test]
     fn mpv_runs_without_the_persons_configuration_and_never_on_drm() {
-        for video in [Video::Discarded, Video::Window] {
+        for video in [Video::Discarded, plane()] {
             let arguments: Vec<String> = arguments(&settings(video, Audio::Discarded))
                 .into_iter()
                 .map(|a| a.into_string().unwrap())
@@ -1181,6 +1285,7 @@ mod tests {
                 "--input-default-bindings=no",
                 "--terminal=no",
                 "--input-ipc-client=fd://0",
+                "--clipboard-backends-clr",
                 "--ao=null",
                 "--title=Aerith",
                 "--gpu-shader-cache-dir=/cache/aerith/shaders",
@@ -1193,9 +1298,12 @@ mod tests {
                     .any(|a| a.contains("drm") || a.contains("log-file"))
             );
         }
-        let window: Vec<OsString> = arguments(&settings(Video::Window, Audio::System));
+        let window: Vec<OsString> = arguments(&settings(plane(), Audio::System));
         assert!(window.contains(&"--gpu-context=waylandvk,wayland".into()));
         assert!(window.contains(&"--vo=gpu-next".into()));
+        // The window is ready before the first open, and the pointer is the interface's.
+        assert!(window.contains(&"--force-window=yes".into()));
+        assert!(window.contains(&"--input-cursor-passthrough=yes".into()));
         assert!(
             !window
                 .iter()
@@ -1203,6 +1311,36 @@ mod tests {
         );
         let discarded = arguments(&settings(Video::Discarded, Audio::System));
         assert!(discarded.contains(&"--vo=null".into()));
+    }
+
+    #[test]
+    fn mpv_inherits_its_wayland_socket_and_no_compositor() {
+        let (_relay_end, mpv_end) = UnixStream::pair().unwrap();
+        let mut process = Process::new("mpv");
+        inherit_wayland_socket(&mut process, &mpv_end).unwrap();
+        let environment: HashMap<_, _> = process.get_envs().collect();
+        let socket = environment[std::ffi::OsStr::new("WAYLAND_SOCKET")]
+            .and_then(|value| value.to_str())
+            .and_then(|value| value.parse::<i32>().ok())
+            .expect("a descriptor's number");
+        assert!(socket > 2, "above the standard three: {socket}");
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new("DISPLAY")),
+            Some(&None),
+            "DISPLAY is removed"
+        );
+        // A second Wayland connection of mpv's goes to a path that cannot exist, never to the
+        // session's compositor: libwayland takes an absolute WAYLAND_DISPLAY as it is.
+        let display = environment[std::ffi::OsStr::new("WAYLAND_DISPLAY")]
+            .and_then(|value| value.to_str())
+            .expect("WAYLAND_DISPLAY is set");
+        assert!(display.starts_with('/'), "an absolute path: {display}");
+        let refused = UnixStream::connect(display).expect_err("no compositor there");
+        assert_eq!(
+            refused.raw_os_error(),
+            Some(rustix::io::Errno::NOTDIR.raw_os_error()),
+            "{refused}"
+        );
     }
 
     #[test]
@@ -1765,6 +1903,27 @@ mod tests {
             assert!(Instant::now() < deadline, "commands fail once mpv is gone");
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn a_relay_that_ends_mpvs_wayland_connection_ends_mpv_and_the_engine() {
+        // An mpv that would go on without its window, as mpv may.
+        let (engine, events, _mpv) = driven(sleeping());
+        let failed = relay_failure(engine.inbox.clone());
+        failed("the relay ended mpv's Wayland connection: a test".to_owned());
+        let Event::EngineFailed(reason) = next(&events) else {
+            panic!("a failure")
+        };
+        assert!(
+            reason.starts_with("the relay ended mpv's Wayland connection: a test"),
+            "{reason}"
+        );
+        assert!(
+            reason.ends_with("did not exit in time and was killed"),
+            "an mpv that does not quit is ended: {reason}"
+        );
+        // A second call, once the engine is gone, is no fault.
+        failed("again".to_owned());
     }
 
     #[test]

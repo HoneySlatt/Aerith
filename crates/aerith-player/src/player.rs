@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::event::{Event, OpenId};
 use crate::mpv;
+use crate::plane::{Plane, Window};
 use crate::source::Source;
 
 /// How a player is started.
@@ -32,9 +33,10 @@ pub struct Settings {
 pub enum Video {
     /// Decoded and timed, never shown: for tests and measures, where no display exists.
     Discarded,
-    /// Shown by the engine in a window of its own, through the session's Wayland compositor, and
-    /// never on the screen directly. Milestone M1.4 places this picture inside Aerith's window.
-    Window,
+    /// Shown in a plane of the interface's Wayland window ([`Plane`]), through Wayland only, never
+    /// by taking the screen directly. The engine's window and video output are made when the
+    /// player starts, ready before the first open.
+    Plane(Window),
 }
 
 /// Where the sound goes.
@@ -65,7 +67,8 @@ pub(crate) enum Command {
 ///
 /// On Linux the engine is mpv, a program apart ([ADR-0003]): a crash of mpv ends that program and
 /// is reported, and Aerith goes on. Dropping the player asks mpv to quit, waits up to two seconds
-/// for it, then kills it; if Aerith itself dies, mpv quits as its connection closes. The program
+/// for it, then kills it, and closes its plane; if Aerith itself dies, mpv quits as its
+/// connection closes. The program
 /// must ignore `SIGPIPE`, as Rust programs do unless told otherwise: a command written as mpv
 /// dies would otherwise end it.
 ///
@@ -77,11 +80,18 @@ pub struct Player {
 
 impl Player {
     /// Starts the engine, idle, and returns the player and the receiver of its events. It fails
-    /// when the engine's program cannot be started; an engine that starts and then fails is
-    /// reported by an [`Event::EngineFailed`].
+    /// when the engine's program cannot be started, or, with [`Video::Plane`], when the window's
+    /// compositor lacks what a plane needs (`wl_compositor` 4, `wl_subcompositor`,
+    /// `wp_viewporter`) or its connection fails; an engine that starts and then fails is reported
+    /// by an [`Event::EngineFailed`].
     pub fn start(settings: &Settings) -> io::Result<(Self, Receiver<Event>)> {
         let (engine, events) = mpv::Engine::start(settings)?;
         Ok((Self { engine }, events))
+    }
+
+    /// The plane the picture shows in, for a player started with [`Video::Plane`].
+    pub fn plane(&self) -> Option<&Plane> {
+        self.engine.plane()
     }
 
     /// Opens `source` and plays it, unless the player is paused; once it loads, it replaces what
