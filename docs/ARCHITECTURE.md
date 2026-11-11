@@ -1,7 +1,13 @@
 # Architecture
 
-No code exists yet. This file describes the parts the decisions call for; it is rewritten to the
-code as each part is built.
+This file describes the parts the decisions call for; it is rewritten to the code as each part is
+built. Of them, only `aerith-player`'s crate exists, and it holds only its documentation.
+
+## The workspace
+
+One Cargo workspace at the root; each crate lives under `crates/`. The toolchain is pinned in
+`rust-toolchain.toml` ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)). How to build and check it
+is in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## Parts
 

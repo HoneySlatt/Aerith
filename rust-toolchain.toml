@@ -1,0 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
+# the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# The stable toolchain that builds and checks Aerith. The development shell reads this file
+# (flake.nix), and so does rustup, on CI's Windows job and for contributors without Nix.
+# ADR-0011 says why; bump it on purpose, with `rust-version` in Cargo.toml.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt", "rust-src", "rust-analyzer"]
+profile = "minimal"

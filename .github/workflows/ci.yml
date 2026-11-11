@@ -1,6 +1,10 @@
-# Runs the automated checks of the definition of done (AGENTS.md) on each push to main and on each
-# pull request, in the same Nix shell that the agents use. Pin actions to commit SHAs, with the
-# release they correspond to in a comment, as SlimeEngine's CI does.
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
+# the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# Runs the automated checks of the definition of done (AGENTS.md) on each push to main, on each
+# pull request and once a week. Pin actions to commit SHAs, with the release they correspond to in a
+# comment, as SlimeEngine's CI does. Each job's timeout is the quality bar's CI budget
+# (docs/ROADMAP.md, Budgets).
 name: CI
 
 concurrency:
@@ -16,16 +20,35 @@ on:
   # stops scheduled runs after 60 days without activity in a public repository.
   schedule:
     - cron: "41 5 * * 2"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Every check, in the same Nix shell that the agents use.
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - run: nix develop --no-update-lock-file --command scripts/check.sh
-  # A Windows job that builds and tests Aerith there comes with the workspace (M1.1, M1.6).
+
+  # Windows is a platform of Stage 1: its lints and tests run there from the start, so that code that
+  # builds on Linux alone is seen at once. There is no Nix on Windows; rustup installs the toolchain
+  # that rust-toolchain.toml pins (ADR-0011).
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the toolchain pinned in rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked

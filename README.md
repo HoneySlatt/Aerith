@@ -11,8 +11,8 @@ Windows, macOS, iPhone, Apple TV, Android phones and Android TV, at a desk and o
 
 ## State
 
-Designed, not built. No code exists yet; nothing can be run. The first stage, the player on the
-desktop, comes next.
+Designed, not yet built. The Rust workspace and its checks exist; nothing can be run yet. The first
+stage, the player on the desktop, is under way.
 
 Aerith installs no content source of its own. What you play through it is your responsibility.
 
@@ -31,7 +31,9 @@ Aerith installs no content source of its own. What you play through it is your r
 nix develop -c scripts/check.sh
 ```
 
-It checks the links between the Markdown files, anchors included, with lychee.
+It runs every automated check: formatting, lints, tests, documentation, the dependencies' licences
+and advisories, the files' licence headers and the links between documents.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) says what each one does and how to build Aerith.
 
 ## Licence
 

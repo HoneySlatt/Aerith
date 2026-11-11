@@ -14,13 +14,15 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   session in uwui's repository is deciding uwui's platform targets (macOS, iOS, tvOS, Android TV),
   HDR and the video element; its answers are recorded in `uwui-needs.md` when they come.
 - **Stage 1, the player on the desktop**
-  ([ADR-0003](adr/0003-mpv-in-its-own-process.md)): planned. Next: M1.1.
+  ([ADR-0003](adr/0003-mpv-in-its-own-process.md)): under way. M1.1 done on 2026-11-11: the Cargo
+  workspace, the toolchain pinned ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)) and every
+  check in CI, on Linux and Windows. Next: M1.2.
 
 ## Status
 
 | Milestone | Goal | Status |
 |---|---|---|
-| [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Planned |
+| [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Done |
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | Planned |
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Planned |
 | [M1.4](#m14--mpv-inside-aeriths-window-on-linux) | mpv's picture sits inside Aerith's window on Linux, under a test interface | Planned |
@@ -43,6 +45,11 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **Done when.** `nix develop -c scripts/check.sh` passes locally and CI is green.
 - **How to test.** `nix develop -c scripts/check.sh`.
 - **Measured.** The check's time, warm and cold; CI's job time (under 20 min).
+- **Result.** Done on 2026-11-11. Beyond what it was to deliver: a check that every file of code or
+  configuration carries the MPL-2.0 header, one on `AGENTS.md`'s length, and a Windows job in CI
+  that runs the lints and tests with rustup. `deny.toml` admits MPL-2.0, the LGPL and permissive
+  licences, as ADR-0002 does. Figures in
+  [`measurements.md`](measurements.md#m11--the-workspace-and-its-checks).
 
 ### M1.2 — The rivals measured and the corpus
 
@@ -113,7 +120,7 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 
 ## Known debt
 
-None yet: no code exists.
+None.
 
 Finished stages move to `docs/history.md`, in a few lines each, so that this file holds the current
 stage only, under about 2,000 words.

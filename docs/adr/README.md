@@ -19,3 +19,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0008](0008-the-quality-bar.md) | The quality bar | Accepted |
 | [0009](0009-the-order-of-the-stages.md) | The order of the stages | Accepted |
 | [0010](0010-the-logo.md) | The logo | Accepted; amends 0002 |
+| [0011](0011-a-pinned-stable-toolchain.md) | A pinned stable toolchain; a nightly only for the checks that need one | Accepted |

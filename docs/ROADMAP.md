@@ -113,6 +113,7 @@ The starting points; M1.2 measures the rivals and sets each figure.
 | Quality bar | Floors and leads, figures measured first ([ADR-0008](adr/0008-the-quality-bar.md)) |
 | Stages | Their order ([ADR-0009](adr/0009-the-order-of-the-stages.md)) |
 | Logo | Aerith's mark, outside the MPL ([ADR-0010](adr/0010-the-logo.md)) |
+| Toolchain | Stable Rust pinned; a nightly only for the checks that need one ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)) |
 
 ### Open
 

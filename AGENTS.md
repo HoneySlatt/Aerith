@@ -10,8 +10,8 @@ macOS, iPhone, Apple TV, Android phones and Android TV, at a desk and on a couch
 be written on uwui, the owner's UI framework, which is not ready yet. It is licensed under MPL-2.0
 ([ADR-0002](docs/adr/0002-mpl-2-0.md)).
 
-Its real state: the design is done (ADRs 0001 to 0010); no code exists. Stage 1, the player on the
-desktop, is next.
+Its real state: the design is done; the Cargo workspace and its checks exist (M1.1), with one crate,
+`aerith-player`, that holds only its documentation. Stage 1, the player on the desktop, is under way.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
 understand it from the repository alone. Documentation is part of every deliverable.
@@ -42,7 +42,7 @@ nix develop          # the development shell: every tool the checks use
 scripts/check.sh     # every check of the definition of done; what CI runs
 ```
 
-`CONTRIBUTING.md` will hold the commands to build, test and run each check alone, from M1.1.
+`CONTRIBUTING.md` holds the commands to build, test and run each check alone.
 
 Never on your own:
 

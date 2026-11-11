@@ -1,0 +1,24 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
+# the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# The Cargo workspace: every crate of Aerith lives under crates/ (docs/ARCHITECTURE.md). The
+# toolchain is pinned in rust-toolchain.toml (ADR-0011).
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MPL-2.0"
+repository = "https://github.com/HoneySlatt/Aerith"
+publish = false
+
+# scripts/check.sh turns every warning into an error.
+[workspace.lints.rust]
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# AGENTS.md: every `unsafe` block says why it is sound, in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "warn"
