@@ -20,8 +20,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   ([ADR-0012](adr/0012-the-test-corpus.md)) and the bench ([ADR-0013](adr/0013-the-bench.md)) are
   built and run; mpv alone and part of Kodi are measured on the high tier. Waiting on the owner:
   the rest of the rivals on the desktop, the lowest laptop, and the bar's figures. By the owner's
-  choice (2026-11-11), M1.3 starts meanwhile: it compares its first frame with the figures M1.2
-  has, and again once M1.2 is done. The owner says when the machine is free for M1.2's runs.
+  choice (2026-11-11), M1.3 went ahead meanwhile. The owner says when the machine is free for
+  M1.2's runs. M1.3 done on 2026-11-11
+  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)), but for its first frame on
+  the desktop, which waits for the owner's go with M1.2's runs. Next: M1.4, on the owner's go.
 
 ## Status
 
@@ -29,7 +31,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 |---|---|---|
 | [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Done |
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | In progress |
-| [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Planned |
+| [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done; its desktop first frame waits on the owner |
 | [M1.4](#m14--mpv-inside-aeriths-window-on-linux) | mpv's picture sits inside Aerith's window on Linux, under a test interface | Planned |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
@@ -96,6 +98,20 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   never a crash of Aerith.
 - **How to test.** `cargo test -p aerith-player`.
 - **Measured.** Press-to-first-frame against M1.2's figure; at rest, no wake-up of Aerith's own.
+- **Result.** Done on 2026-11-11. `Player` opens a file or an `http(s)` stream with its headers,
+  plays, pauses, seeks and stops it; its events give the first frame, the pause, a clock, mpv's
+  report (decoder, colours, sound) and its failures. mpv reads its IPC on its standard input, with
+  nothing of the person's; headers and URLs never reach a command line or a log
+  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)). Tests: 28 against a fake
+  mpv; 8 against the real mpv in CI, crash and headers included; the whole corpus by hand, which
+  passes. At rest, 0 wake-ups of Aerith's own, paused, stopped and even playing, checked in CI.
+  The first frame, picture discarded, is within the noise of mpv alone driven the same way; M1.2's
+  figures drew the picture and are not comparable
+  ([figures](measurements.md#m13--mpv-driven-through-aerith-player)). Beyond the plan: an example
+  program (`play`), a `--window` output through Wayland, and `PictureFailed` when mpv drops a
+  picture its output cannot show.
+- **Left, on the owner's go.** The first frame on the desktop, through `--window`, against mpv
+  alone run the same way, about 5 minutes of the screen; again once M1.2 is complete.
 
 ### M1.4 — mpv inside Aerith's window on Linux
 
@@ -138,6 +154,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - Contribute to mpv the Vulkan render API its maintainers described, so that the video becomes a
   texture of the interface ([ADR-0003](adr/0003-mpv-in-its-own-process.md)).
 - The player screen as uwui's screen of reference for glass over moving content.
+- Run mpv sandboxed in Aerith too, as its tests run it: no session bus (the keyring is reached
+  through it), no home but its cache, the network only for the stream it plays.
 - The logo drawn again as a true vector, the same flower, without the raster's stray specks: crisp
   at every size and a fraction of its 765 KB ([ADR-0010](adr/0010-the-logo.md)).
 
@@ -150,6 +168,17 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - For Stremio and Jellyfin Desktop, the time to the first frame is their engine's, not their
   interface's: the bench loads the clip itself.
 - E-AC3 with Atmos has no source in the corpus ([ADR-0012](adr/0012-the-test-corpus.md)).
+- An mpv that freezes without exiting is not detected: its commands go unanswered
+  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
+- mpv fetches streams itself, outside the I/O layer: Stage 2 checks a stream's host against the
+  I/O layer's rules before opening it.
+- The player's report uses mpv's names for codecs, formats and colours, and says nothing of Dolby
+  Vision yet (M1.5).
+- `--window` was run only where it fails (`agent-headless`, without a GPU): its picture on a real
+  display is untested.
+- `scripts/check.sh` grew from 33 s to 115 s: `scripts/test-check.sh` runs the whole test suite,
+  `at_rest`'s 7 s included, in six of its copies. A lighter way for those copies is the owner's
+  call.
 
 Finished stages move to `docs/history.md`, in a few lines each, so that this file holds the current
 stage only, under about 2,000 words.

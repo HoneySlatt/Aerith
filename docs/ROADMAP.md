@@ -79,7 +79,7 @@ once they are, with the owner.
 
 | Budget | Kind | Target | Measured by | Checked in | Rivals measured (M1.2) |
 |---|---|---|---|---|---|
-| At rest | floor | 0 frames drawn, 0 wake-ups a second of Aerith's own, playback paused or stopped | `pidstat -w`, `/proc/<pid>/status` | by hand at each milestone touching it | not measured: Aerith's own |
+| At rest | floor | 0 frames drawn, 0 wake-ups a second of Aerith's own, playback paused or stopped | `pidstat -w`, `/proc/<pid>/status` | the player's: its `at_rest` test, in CI, from M1.3; the rest by hand at each milestone touching it | not measured: Aerith's own |
 | Cadence | floor | No frame dropped or repeated without a cause shown, over 30 min, for 23.976 to 60 fps content, at 60 Hz, at 240 Hz and with VRR | the player's frame statistics and the compositor's presentation feedback | the Stage 1 bench, by hand | mpv on 240 Hz: 0 dropped, 0 delayed, 2 min at 23.976 and at 59.94, 1 min at 25 (3.2 threads busy elsewhere). Repeated frames and the compositor's feedback not read; 60 Hz and VRR not measured |
 | Sound and image | floor | Within ±20 ms over 30 min, after seeks and pauses | the engine's own estimate (ADR-0013); a capture of the beat later | the Stage 1 bench | mpv: under 0.05 ms, its estimate without the card's latency; no seek or pause measured |
 | Image | floor | The same picture as mpv alone, same version and options, within a tolerance set at M1.2 | captured frames compared | the Stage 1 bench | not measured: needs Aerith's frames (M1.4) |

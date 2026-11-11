@@ -46,9 +46,13 @@
             pkgs.git
             # Checks the links of the documents and of the code's documentation.
             pkgs.lychee
-            # The bench's sandbox (ADR-0013), which its tests exercise.
+            # The bench's sandbox (ADR-0013), which its tests exercise, and aerith-player's tests
+            # too.
             pkgs.bubblewrap
           ];
+          # The mpv aerith-player's tests drive: the same build as the bench's mpv, without the
+          # wrapper that adds yt-dlp, which the player never loads.
+          AERITH_TEST_MPV = "${pkgs.mpv-unwrapped}/bin/mpv";
         };
 
         # The bench's shell: `nix develop .#bench`. Everything the default shell holds, plus what

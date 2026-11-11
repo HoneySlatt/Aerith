@@ -20,27 +20,66 @@ It holds:
 - `cargo deny`, which enforces the dependency policy of `deny.toml`;
 - `git`, with which the checks list the repository's files and cargo deny fetches the advisories;
 - `lychee`, which checks links;
-- `bwrap` (bubblewrap), the bench's sandbox, which its tests run. It needs unprivileged user
-  namespaces; CI's Ubuntu runner turns them on first.
+- `bwrap` (bubblewrap), the bench's sandbox, which its tests and the player's run. It needs
+  unprivileged user namespaces; CI's Ubuntu runner turns them on first;
+- mpv, which the player's tests drive, named by `AERITH_TEST_MPV`: the same build as the bench's
+  mpv, without its wrapper.
 
-The first entry downloads the toolchain, about 150 MB.
+The first entry downloads the toolchain, about 150 MB, and mpv with what it needs, up to 750 MB.
 
 The bench has a shell of its own, `nix develop .#bench`: the default shell's tools, plus what makes
 the test corpus and the rivals the bench measures ([below](#the-bench)). CI does not load it.
 
 Without Nix, rustup reads `rust-toolchain.toml` and installs the same toolchain; `cargo deny`,
-`lychee` and `bwrap` are then yours to install. CI's Windows job works this way.
+`lychee`, `bwrap` and mpv are then yours to install, and `AERITH_TEST_MPV` yours to set. CI's
+Windows job works this way; there the player has no engine yet (M1.6), and its tests against mpv do
+not build.
 
 ## Building and testing
 
-Aerith itself does not play yet: `aerith-player` holds only its documentation until M1.3
-([`docs/PLAN.md`](docs/PLAN.md)). The workspace also holds `aerith-bench`, the bench
+The workspace holds `aerith-player`, Aerith's player, and `aerith-bench`, the bench
 ([below](#the-bench)). The commands that build and test the workspace:
 
 ```sh
 cargo build --workspace
 cargo test --workspace
 ```
+
+### The player's tests
+
+`cargo test -p aerith-player` runs three kinds of test
+([ADR-0014](docs/adr/0014-the-player-interface-and-mpvs-connection.md)):
+
+- in `src/`, against a fake mpv: every event, error and limit;
+- in `tests/mpv.rs` and `tests/at_rest.rs`, against the real mpv that `AERITH_TEST_MPV` names, on
+  clips mpv makes itself. Each mpv runs in bubblewrap with a home of the test's own, and no sound
+  device or display in reach; the picture and the sound are discarded. `at_rest` checks that a
+  paused or stopped player wakes none of Aerith's threads;
+- in `tests/corpus.rs`, on the whole corpus ([below](#the-corpus)), ignored unless asked for:
+
+```sh
+AERITH_CORPUS=~/.cache/aerith-bench/corpus cargo test --release -p aerith-player --test corpus -- \
+    --ignored --test-threads=1 --nocapture
+```
+
+It plays every clip, then the bench's clip as a stream, and prints the time to each first frame
+and what mpv reported; then it times the first frame five times from a file and five from a
+stream. Run it at each milestone that touches playback, on an idle machine; its figures go to
+[`docs/measurements.md`](docs/measurements.md).
+
+### Playing a file
+
+```sh
+cargo run --release -p aerith-player --example play -- <file or URL> [--window] [--sound] \
+    [--seconds N] [--header "Name: value"]...
+```
+
+plays a file or a stream through the player and prints each event, with the time since it was
+opened, a second after the player started. By default nothing is shown or heard. `--window` shows
+the picture in mpv's own window, on a Wayland session; `--sound` plays the sound aloud. It runs the
+`mpv` of `PATH`, or the program `--mpv` names, with your own home: mpv writes nothing there itself,
+but with `--window` the GPU's driver keeps its shader cache under `~/.cache`, as for any program
+that draws. Play test clips only.
 
 ## The checks
 

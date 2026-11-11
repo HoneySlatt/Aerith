@@ -12,7 +12,8 @@ Each need is marked:
 - **Wished** otherwise.
 
 The last column says what uwui holds today, read against SlimeEngine's ADR-0181 and ADR-0190 and
-uwui's ROADMAP on 2026-11-11: *Yes*, *Planned* (and where), *Out of scope*, or *New*.
+uwui's ROADMAP on 2026-11-11: *Yes*, *Planned* (and where), *Out of scope*, or *New*; a need added
+since, not yet read against them, says so.
 
 ## The video plane
 
@@ -56,6 +57,7 @@ The interface sits above it and, on Android, Windows and Apple, cannot read its 
 | Large virtual grids and rows of posters, scrolled sideways and down, images decoded off the interface's thread in a bounded cache | Indispensable, Stage 3 | Planned: virtual lists, first stage |
 | Text ready for translation (Fluent), right-to-left | Indispensable, Stage 3 | Planned: before 1.0 |
 | Subtitles drawn by the interface where the engine does not (ASS on Android and Apple) | Wished, Stage 4 | New; may stay in Aerith |
+| A way to wake the interface's loop from another thread, so that an event the player sends from its own thread ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)) is shown at once, without polling | Indispensable, Stage 3 | Not read against uwui yet (added at M1.3) |
 
 ## The trial Aerith asks for
 

@@ -99,3 +99,106 @@ defaults of the other rivals (figures without a GPU are not tier figures):
 
 - Stremio's mpv decodes in software: its shell never sets `hwdec`.
 - Jellyfin Desktop's mpv uses `vaapi-copy` and downmixes to stereo by default.
+
+## M1.3 — mpv driven through `aerith-player`
+
+Measured on 2026-11-11 on the high tier ([ROADMAP](ROADMAP.md#hardware)), with mpv 0.42.0
+(`mpv-0.42.0`, the build the bench's `mpv-with-scripts` wraps), FFmpeg 9.0.2, Rust 1.99.1, in
+`nix develop`. The picture and the sound discarded (`--vo=null --ao=null`), so mpv decodes in
+software and draws nothing; each mpv in bubblewrap ([CONTRIBUTING](../CONTRIBUTING.md#the-players-tests)).
+
+**Limits.** Other sessions were building throughout: the load average was 4 to 9 on 16 threads
+during the first frame's series, 7 during the corpus. The figures show the player's behaviour and
+its cost beside mpv's, not a tier figure: those need the picture on the desktop
+([below](#against-m12)).
+
+### The time to the first frame
+
+From `open` to `Event::Started` (mpv's `playback-restart`), the player started a second before, the
+bench's clip `hdr10-2160p-hevc10-eac3` in the page cache, by the corpus test's
+`time_to_the_first_frame`. Five runs a series.
+
+| Series | Load | Through `aerith-player`, ms | Median | mpv alone, ms | Median |
+|---|---|---|---|---|---|
+| 1 | 4.6 | 270, 246, 205, 175, 193 | 205 | 257, 229, 217, 157, 186 | 217 |
+| 2 | 4.3 | 408, 448, 346, 281, 284 | 346 | 272, 252, 212, 162, 161 | 212 |
+| 3 | 5.9 | 464, 424, 361, 268, 326 | 361 | 463, 408, 313, 232, 351 | 351 |
+| 4 | 6.9 | 498, 453, 320, 400, 396 | 400 | 576, 506, 339, 257, 290 | 339 |
+| 5 | 8.8 | 484, 390, 395, 262, 432 | 395 | 496, 426, 321, 371, 458 | 426 |
+| 6 | 7.3 | 275, 250, 214, 182, 202 | 214 | – | – |
+
+- "mpv alone" is mpv with the player's options, its IPC on a socket file instead, driven from a
+  shell over one `socat` connection, from `loadfile` to `playback-restart`, alternated with the
+  player's series. The two differ by less than the machine's noise: the player adds no cost that
+  these series can see.
+- As a stream over HTTP on 127.0.0.1: 180, 261, 220, 182, 186 ms (median 186), then 177, 174,
+  236, 177, 245 (177), then 206, 184, 196, 180, 190 (190).
+
+### Against M1.2
+
+M1.2's figures for mpv alone, on the same clip: 617 ms from a file and 690 ms as a stream (medians,
+under a load test), 390 to 445 ms on other clips at rest. They are not comparable with the figures
+above: M1.2's mpv drew fullscreen through gpu-next with hardware decoding, and its first frame
+includes the video output's start and the compilation of its shaders, which a discarded picture
+skips. The comparison on the desktop, through `--window`, waits for the owner's go, and is taken
+again once M1.2 is complete ([PLAN](PLAN.md#m13--mpv-driven-through-aerith-player)).
+
+### The corpus
+
+Every clip opened paused, sought to 0.2 s, played and stopped, by the corpus test, with the load at
+7. The time is to the first frame, from a paused start; what follows is mpv's report.
+
+| Clip | First frame | What mpv reported |
+|---|---|---|
+| audio-dts-5.1 | 122 ms | h264 1920×1080 bt.709/bt.1886; dts 5.1(side) 48 kHz |
+| audio-dtshd-ma-7.1 | 35 ms | h264 1920×1080 bt.709/bt.1886; dts 7.1(wide) 48 kHz |
+| audio-dtsx-7.1.4 | 14 ms | h264 1920×1080 bt.709/bt.1886; dts 7.1 48 kHz |
+| audio-eac3-5.1 | 37 ms | h264 1920×1080 bt.709/bt.1886; eac3 5.1(side) 48 kHz |
+| audio-truehd-5.1 | 32 ms | h264 1920×1080 bt.709/bt.1886; truehd 5.1(side) 48 kHz |
+| audio-truehd-atmos-7.1 | 13 ms | h264 1920×1080 bt.709/bt.1886; truehd 7.1 48 kHz |
+| cadence-23.976 to cadence-60 (7 clips) | 32 to 48 ms | h264 1920×1080 bt.709/bt.1886; aac stereo 48 kHz |
+| dv5-2160p-hevc10-eac3 | 299 ms | hevc 3840×2160 bt.2020/pq; eac3 5.1(side) 48 kHz |
+| dv7-1080p (MPEG-TS) | 60 ms | hevc 1920×1080 bt.2020/pq; no sound track |
+| dv7-2160p | 94 ms | hevc 3840×2160 bt.2020/pq; no sound track |
+| dv8.1-2160p-hevc10-eac3 | 226 ms | hevc 3840×2160 bt.2020/pq; eac3 5.1(side) 48 kHz |
+| dv8.4-2160p-hevc10-eac3 | 193 ms | hevc 3840×2160 bt.2020/pq; eac3 5.1(side) 48 kHz |
+| hdr10-2160p-hevc10-eac3 | 196 ms | hevc 3840×2160 bt.2020/pq; eac3 5.1(side) 48 kHz |
+| hdr10plus-2160p-hevc10-eac3 | 189 ms | hevc 3840×2160 bt.2020/pq; eac3 5.1(side) 48 kHz |
+| heavy-hdr10-2160p-hevc10-truehd | 240 ms | hevc 3840×2160 bt.2020/pq; truehd 5.1(side) 48 kHz |
+| hlg-2160p-hevc10-eac3 | 201 ms | hevc 3840×2160 bt.2020/hlg; eac3 5.1(side) 48 kHz |
+| real-cosmos-laundromat-hdr10 | 66 ms | hevc 2048×858 bt.2020/pq; no sound track |
+| sdr-2160p-hevc10-eac3 | 221 ms | hevc 3840×2160 bt.709/bt.1886; eac3 5.1(side) 48 kHz |
+| hdr10-2160p-hevc10-eac3, as a stream | 188 ms | the same as from the file |
+
+- The audio clips' sounds are short (the fetched DTS:X and TrueHD Atmos samples last under a
+  second): their first frames come early. Their pictures last two frames: the seek to 0.2 s stops
+  on the last one, at 41 ms.
+- `dv7-1080p`, an MPEG-TS clip under half a second, ends when mpv seeks into it; the player reports
+  it as `Ended(Finished)`.
+- mpv's `video-params` say nothing of Dolby Vision: the profile 5, 7 and 8 clips report their
+  base layer's colour. Reporting Dolby Vision is M1.5's.
+
+### At rest
+
+The player's two threads' context switches, read in `/proc/self/task/<tid>/status` by the test
+`at_rest`, over 2 s in each state, on a 320×240 clip mpv makes, beside mpv's own threads:
+
+| State | The player's threads | mpv's threads |
+|---|---|---|
+| Playing | 0 | 213 and 219 a second, in two runs |
+| Paused | 0 | 2 a second |
+| Stopped, idle | 0 | 1 a second |
+
+The floor holds: 0 wake-ups of Aerith's own, paused or stopped, and none while playing either, as
+the position is sent as a clock. mpv's are mpv's; the bench compares them with mpv alone.
+
+### The checks
+
+| What | Before M1.3 | After | How |
+|---|---|---|---|
+| `scripts/check.sh` | 33.3 s | 115.5 s | the whole check, warm, load 8 to 11; before: the starting commit in a worktree of its own |
+| Its steps without `scripts/test-check.sh` | – | 16.1 s | with `AERITH_CHECK_INNER=1` |
+| `cargo test -p aerith-player` | – | about 11 s | of which 7 s for `at_rest`, 2 s for the unit tests |
+
+`scripts/test-check.sh` runs the whole test suite in six of its scratch copies, `at_rest`
+included: most of the growth is there.
