@@ -28,8 +28,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   2026-11-11 ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md),
   [ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md),
   [ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) and split in two by the owner. M1.4a
-  done on 2026-11-12 ([ADR-0018](adr/0018-what-building-the-relay-changed.md)). M1.4b under way
-  since 2026-11-12.
+  done on 2026-11-12 ([ADR-0018](adr/0018-what-building-the-relay-changed.md)). M1.4b done on
+  2026-11-12 ([ADR-0019](adr/0019-the-video-above-a-black-root.md) to
+  [ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). Next: M1.4c, on the
+  owner's go.
 
 ## Status
 
@@ -39,7 +41,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | In progress |
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done |
 | [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | Done |
-| [M1.4b](#m14b--inside-the-window-measured) | The floors hold inside the window; the plane's order and display sync decided | In progress |
+| [M1.4b](#m14b--inside-the-window-measured) | The floors measured inside the window; the plane's order and display sync decided | Done |
 | [M1.4c](#m14c--display-sync-by-the-displays-rate) | The cadence floor holds inside the window, display sync chosen by the display's rate | Planned |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
