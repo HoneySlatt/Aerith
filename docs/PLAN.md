@@ -28,8 +28,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   2026-11-11 ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md),
   [ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md),
   [ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) and split in two by the owner. M1.4a
-  done on 2026-11-12 ([ADR-0018](adr/0018-what-building-the-relay-changed.md)). Next: M1.4b, on the
-  owner's go.
+  done on 2026-11-12 ([ADR-0018](adr/0018-what-building-the-relay-changed.md)). M1.4b under way
+  since 2026-11-12.
 
 ## Status
 
@@ -39,7 +39,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | In progress |
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done |
 | [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | Done |
-| [M1.4b](#m14b--inside-the-window-measured) | The floors hold inside the window; the plane's order and display sync decided | Planned |
+| [M1.4b](#m14b--inside-the-window-measured) | The floors hold inside the window; the plane's order and display sync decided | In progress |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
 
@@ -175,6 +175,21 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **How to test.** The bench, on the owner's display.
 - **Measured.** Cadence, sync, power and memory against mpv alone.
 - **By hand.** The owner watches the clips, and switches the monitor to 60 Hz and to VRR.
+- **Where it stands** (2026-11-12).
+  - Done:
+    - the cause of no scanout: mpv's buffers carry alpha, and the relay dropped the opaque region
+      mpv sets; it now passes it (`577cbd1`), and Umbriel scans the video out in the order above;
+    - the bench measures Aerith through the testbed, and reads the compositor's presentation
+      feedback for mpv alone and Aerith alike; `scripts/bench-window.sh` runs this milestone's
+      measures ([CONTRIBUTING](../CONTRIBUTING.md#aerith-inside-its-window));
+    - a first pass on the desktop, 3 minutes at 240 Hz
+      ([figures](measurements.md#a-first-pass-on-the-desktop)), beside another session's load:
+      mpv alone keeps cadence no better than Aerith, about a third of gaps off the ideal; Aerith's
+      frames differ from mpv alone's by
+      one step of 8-bit dithering, as mpv dithers to 8 bits without colour management.
+  - Next, each on the owner's screen and go: `scripts/bench-window.sh` at 240 Hz, then at 60 Hz
+    and with VRR, which the owner sets; the floor's 30 minutes is the owner's call. Then the two
+    decisions.
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
@@ -252,12 +267,12 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
   libwayland-client at run time, the player's included: the development shell sets
   `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
-- Umbriel never scanned the video out, in either order. The cause is not known: the relay passes
-  neither mpv's opaque region nor its damage, and its code assumes an opaque buffer format says
-  enough. To find before M1.4b compares the orders.
-- Through the relay, at 240 Hz, about 11 % of 23.976 fps frames lasted 9 or 11 refreshes rather
-  than 10. Whether mpv alone does the same (its own pacing in MAILBOX, without fifo-v1) is
-  M1.4b's to measure, against the cadence floor.
+- At 240 Hz on Umbriel, many refresh gaps of a 23.976 fps film are off the ideal pattern, in mpv
+  alone as in Aerith: about 11 % at M1.4a, a third beside another session's load. mpv paces
+  itself without fifo-v1. It fails the cadence floor, which mpv's own counters do not show;
+  display sync and a quiet machine are measured next.
+- Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
+  bits, and mpv alone does not: their frames differ by one step of 8 bits.
 - The window's thread wakes about 50 times a second while a film plays, for events addressed to
   mpv on the socket it shares with the relay. `wl-proxy` would spare it
   ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)); the owner weighs it.

@@ -406,3 +406,46 @@ Keeping it ready costs 84 MiB, on this tier, for the whole time Aerith runs.
   - order above: the same, 0 and 0.
 
   At rest on the desktop was not measured.
+
+## M1.4b — Inside the window, measured
+
+### A first pass on the desktop
+
+Measured on 2026-11-12 from 02:20 to 02:23 CET on the owner's desktop, through `owner-desktop`.
+Setup:
+- the display: DP-3 at 240.016 Hz, scale 1.5, SDR, Umbriel;
+- `aerith-bench` ([CONTRIBUTING](../CONTRIBUTING.md#aerith-inside-its-window)), mpv 0.42.0 alone and
+  inside `aerith-testbed`, the relay passing mpv's opaque region (`577cbd1`);
+- `cadence-23.976-1080p-h264-aac`, 30 s a run, the sound into the bench's silent PipeWire.
+
+Another session's tests kept 9 to 14 hardware threads busy during these three runs: their power
+and CPU are not figures. The cadence and the scanout are.
+
+| Player | Frames scanned out | Gaps off cadence, mpv's feedback | The relay's own count | mpv's dropped / delayed |
+|---|---|---|---|---|
+| mpv alone | 0 of 652 | 241 of 622 | – | 0 / 0 |
+| Aerith, order below | 0 of 705 | 241 of 663 | 277 of 719 | 0 / 0 |
+| Aerith, order above | 692 of 722 | 207 of 698 | 222 of 719 | 0 / 0 |
+
+- **Umbriel scans the video out in the order above**, now that the relay passes mpv's opaque region:
+  mpv's buffers are `ARGB2101010` or the like, with alpha
+  ([`surface.rs`](../crates/aerith-player/src/relay/surface.rs)), so without the region the black
+  root under them had to be drawn. **In the order below it never can**: winit's transparent
+  surface lies over the video, and wlroots scans out a single buffer only.
+- **mpv alone keeps cadence no better than Aerith.** The ideal at this rate is a gap of 10
+  refreshes and one of 11 in 93; here about a third of the gaps are 9 or 11 (8, 12 and 13 a few),
+  in every player. At M1.4a, on a quieter machine, the relay saw about 11 %
+  ([above](#inside-the-testbed-on-the-desktop)): the load counts. mpv's own counters see none of it. It is mpv's own pacing: without fifo-v1, it
+  commits each frame when due, and the refresh it lands on varies.
+- The relay's count, with feedback on every frame, and the figure read from mpv's own feedback
+  agree within a few points.
+
+**The frames compared**, `--frames 5,20,40` on `sdr-2160p-hevc10-eac3` and on
+`cadence-23.976-1080p-h264-aac`, captured by mpv as it draws them in its window:
+- PSNR 62.1 to 62.9 dB between Aerith's and mpv alone's, on 16-bit PNGs; 40 % of the values
+  differ, by at most 257 in 65,535, about one step of 8 bits.
+- The cause, read in mpv 0.42's `video/out/vulkan/context_wayland.c`: without the colour
+  management protocol, mpv dithers to 8 bits ("Dithering to 8 bit depth" in Aerith's mpv log,
+  absent from mpv alone's). The relay offers no colour management until M1.5.
+- In `agent-headless`, where neither mpv sees colour management, the frames are the same (PSNR
+  infinite).
