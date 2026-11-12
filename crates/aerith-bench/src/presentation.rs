@@ -19,7 +19,8 @@
 //! The figures:
 //!
 //! - **refresh gaps**: how many refreshes a frame stayed on screen before the next, from the
-//!   refresh counter (`msc`). The ideal gap is the display's rate over the frames' rate, `r`: a
+//!   refresh counter (`msc`), or from the time between them over the refresh period when the
+//!   compositor keeps no counter (KWin 6.8). The ideal gap is the display's rate over the frames' rate, `r`: a
 //!   film at 23.976 frames a second on a 240.016 Hz display has r = 10.0107, so each frame shows
 //!   10 refreshes and one in 93 shows 11. The gaps **off cadence** are those the ideal pattern
 //!   does not hold, counted on their histogram: of n gaps, the pattern has (1 − f) n of
@@ -135,6 +136,21 @@ pub fn parse(log: &str) -> Vec<Fate> {
     frames
 }
 
+/// The refreshes from `before` to `after`: by the refresh counters when the compositor keeps one,
+/// else by the time between them over the refresh period, rounded, as KWin 6.8 sends no counter.
+/// `None` when neither says, or when the counter or the time went back (an output changed).
+fn refreshes_between(before: &Presented, after: &Presented) -> Option<u64> {
+    if before.msc != 0 && after.msc != 0 {
+        return after.msc.checked_sub(before.msc).filter(|gap| *gap > 0);
+    }
+    if after.refresh_ns == 0 || after.at_ns <= before.at_ns {
+        return None;
+    }
+    let refresh = u128::from(after.refresh_ns);
+    let gap = (after.at_ns - before.at_ns + refresh / 2) / refresh;
+    u64::try_from(gap).ok().filter(|gap| *gap > 0)
+}
+
 /// The arguments of `presented`: `tv_sec_hi, tv_sec_lo, tv_nsec, refresh, seq_hi, seq_lo, flags`.
 fn presented(arguments: &str) -> Option<Presented> {
     let numbers: Vec<u64> = arguments
@@ -194,9 +210,8 @@ pub fn figures(frames: &[Fate], settle: f64, frame_rate: Option<f64>) -> Value {
         .collect();
     let mut gaps = BTreeMap::new();
     for (before, after) in &pairs {
-        // A counter that goes back, or none at all, gives no gap.
-        if after.msc > before.msc && before.msc > 0 {
-            *gaps.entry(after.msc - before.msc).or_insert(0_u64) += 1;
+        if let Some(gap) = refreshes_between(before, after) {
+            *gaps.entry(gap).or_insert(0_u64) += 1;
         }
     }
     let intervals: Vec<f64> = pairs
@@ -418,9 +433,10 @@ mod tests {
     }
 
     #[test]
-    fn without_a_refresh_counter_there_are_no_gaps() {
+    fn without_a_refresh_counter_gaps_come_from_time() {
+        // 42 ms apart at a refresh of 4.166388 ms: 10 refreshes.
         let figures = figures(&parse(&log_of(&[0, 0, 0], 0)), 0.0, None);
-        assert_eq!(figures["refresh_gaps"], Value::Null);
+        assert_eq!(figures["refresh_gaps"]["counts"], json!({"10": 2}));
         assert_eq!(figures["presented"], 3);
     }
 
