@@ -89,7 +89,9 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   one mpv has destroyed since. mpv's buffers carry alpha, and mpv says its picture is opaque
   through its opaque region: when that region covers mpv's whole surface, the plane's whole
   surface is said to be opaque, so that the compositor need not draw what lies under it, and can
-  scan the video out. The surface runs desynchronized, so mpv's frames show without the
+  scan the video out. mpv's fifo barriers, when the compositor offers fifo, go on the plane's own
+  fifo with the commit they came with ([ADR-0020](adr/0020-what-measuring-the-relay-changed.md)).
+  The surface runs desynchronized, so mpv's frames show without the
   interface drawing. A place, show or hide of the interface's that changes the plane's own state
   while it shows switches it to synchronized, so that the change appears with the interface's
   next commit; once the compositor drew it, the surface runs desynchronized again.
@@ -129,7 +131,8 @@ winit's loop ◀── UserEvent ── aerith-testbed-events ◀── player's
 winit's loop ◀── open, pause, controls, quit ── aerith-testbed-schedule ──▶ stats on stdout
 ```
 
-- **Two orders of the surfaces**, which M1.4b compares. `below`: the plane under winit's surface,
+- **Two orders of the surfaces**, which M1.4b compared; Aerith keeps the order above
+  ([ADR-0019](adr/0019-the-video-above-a-black-root.md)). `below`: the plane under winit's surface,
   which wgpu draws transparent but for the controls. `above`: winit's surface holds a black pixel
   that its viewport scales to the window; the plane lies on it, under a subsurface of the testbed's
   own, which wgpu draws and which holds no buffer while the controls are hidden, so that the
