@@ -308,10 +308,13 @@ added, through which the bench reads mpv's counters without driving it. `--order
 chooses the order of the surfaces, `--toggle-controls N` shows and hides the controls N times,
 and `--mpv-option` adds an option to that mpv. For mpv alone and Aerith, the bench reads the
 compositor's presentation feedback from mpv's Wayland messages (`WAYLAND_DEBUG=client`): the
-frames presented, those scanned out (`zero_copy`), and the refresh gaps between them, a frame
-off cadence being one whose gap is neither of the two whole numbers around the run's mean.
-`--frames 5,20,40` captures the frames at those times instead of measuring the playback, as mpv
-draws them in its window.
+frames presented, those scanned out (`zero_copy`), and the refresh gaps between them against the
+ideal pattern the clip's rate and the display's give (`src/presentation.rs` says how gaps off
+cadence are counted). mpv asks for feedback on most frames, not all: a gap is measured only
+between two frames that both have it. For Aerith, the relay's own count, with feedback on every
+frame, is in the result's `testbed.relay_presentation`. `aerith-bench presentation <log> [rate]`
+prints these figures for a log a run kept. `--frames 5,20,40` captures the frames at those times
+instead of measuring the playback, as mpv draws them in its window.
 
 ```sh
 scripts/bench-window.sh <corpus> "<display>" [cadence|toggles|sync|frames]...

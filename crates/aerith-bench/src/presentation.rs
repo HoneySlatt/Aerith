@@ -4,24 +4,33 @@
 //! What mpv's frames did on screen, read from mpv's own Wayland connection, the same way for mpv
 //! alone and for mpv inside Aerith's window.
 //!
-//! With `WAYLAND_DEBUG=client`, libwayland prints every message of a connection on standard error.
-//! mpv asks the compositor for presentation feedback on each frame it commits; the compositor
-//! answers each with `presented` (when, at which refresh, and how: scanned out or composited) or
-//! `discarded`. Through Aerith's relay, these answers are the real compositor's, passed back.
+//! With `WAYLAND_DEBUG=client`, libwayland prints every message of a connection on standard error,
+//! in order. Each frame of mpv's is a commit of its surface with a buffer attached, which the
+//! Vulkan driver makes. mpv asks the compositor for presentation feedback when its frame callback
+//! comes, for the next commit; the compositor answers with `presented` (when, at which refresh,
+//! and how: scanned out or composited) or `discarded`. Through Aerith's relay, these answers are
+//! the real compositor's, passed back.
+//!
+//! **Not every frame has feedback.** When the driver commits two frames between two of mpv's frame
+//! callbacks, the second has none. The figures therefore say how many frames had it, and measure a
+//! gap only between two frames committed one after the other that both had it. Aerith's relay asks
+//! for feedback on every frame, so its own count (`aerith-testbed --stats`) has every gap.
 //!
 //! The figures:
 //!
-//! - **refresh gaps**: how many refreshes each frame stayed on screen, from the refresh counter
-//!   (`msc`). A film at 23.976 frames a second on a 240.016 Hz display shows each frame 10
-//!   refreshes, and one 11 about every 3.9 s. A frame is **off cadence** when its gap is neither
-//!   of the two whole numbers around the run's mean gap: shown too long or too short for the
-//!   content's rate. This holds at any fixed refresh rate, with or without display sync.
+//! - **refresh gaps**: how many refreshes a frame stayed on screen before the next, from the
+//!   refresh counter (`msc`). The ideal gap is the display's rate over the frames' rate, `r`: a
+//!   film at 23.976 frames a second on a 240.016 Hz display has r = 10.0107, so each frame shows
+//!   10 refreshes and one in 93 shows 11. The gaps **off cadence** are those the ideal pattern
+//!   does not hold, counted on their histogram: of n gaps, the pattern has (1 − f) n of
+//!   ⌊r⌋ and f n of ⌈r⌉, f being r's fraction; every gap past those, and every gap of another
+//!   length, is off cadence. A frame shown 9 refreshes and the next 11, at r = 10.0107, are two
+//!   gaps off cadence. This holds at any fixed refresh rate, with or without display sync.
 //! - **intervals**: the time between two frames presented, for variable refresh rates, where the
 //!   refresh counter says nothing of the content's cadence.
 //! - **zero copy**: the frames the compositor scanned out straight from mpv's buffer.
-//!
-//! Several feedback objects may ask about one commit (mpv's own, and the Vulkan driver's for its
-//! present timing): their answers carry the same time, so the frames are counted once by time.
+
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
@@ -30,7 +39,7 @@ use crate::figures;
 /// `wp_presentation_feedback.kind.zero_copy`.
 const ZERO_COPY: u32 = 0x8;
 
-/// One frame the compositor presented.
+/// How the compositor presented a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Presented {
     /// When it showed, in nanoseconds on the compositor's presentation clock.
@@ -43,38 +52,87 @@ pub struct Presented {
     pub flags: u32,
 }
 
-/// What a log holds, in order.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Feedback {
-    pub presented: Vec<Presented>,
-    pub discarded: u64,
+/// What became of one frame mpv committed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Fate {
+    /// No feedback was asked for it, or none came before the log ends.
+    #[default]
+    Unknown,
+    Presented(Presented),
+    Discarded,
 }
 
-/// Reads the presentation feedback in a libwayland debug log. Lines of any other kind, and lines
-/// the log mixes in from the program's own output, are skipped; requests (`->`) are not answers.
-pub fn parse(log: &str) -> Feedback {
-    let mut feedback = Feedback::default();
+/// mpv's frames, in the order it committed them, as the log tells them.
+pub fn parse(log: &str) -> Vec<Fate> {
+    let mut surface: Option<String> = None;
+    let mut frames: Vec<Fate> = Vec::new();
+    // Feedback asked since the surface's last commit, and the frame each one asked about since.
+    let mut pending: Vec<String> = Vec::new();
+    let mut asked: HashMap<String, Option<usize>> = HashMap::new();
+    let mut attached = false;
     for line in log.lines() {
-        if line.contains(" -> ") {
+        if let Some((_, request)) = line.split_once(" -> ") {
+            if let Some(rest) = request.strip_prefix("wp_presentation") {
+                // `wp_presentation#17.feedback(wl_surface#8, new id wp_presentation_feedback#73)`
+                let Some((target, id)) = rest
+                    .split_once(".feedback(")
+                    .and_then(|(_, arguments)| arguments.strip_suffix(')'))
+                    .and_then(|arguments| arguments.split_once(", new id "))
+                else {
+                    continue;
+                };
+                if surface.is_none() {
+                    surface = Some(target.to_owned());
+                }
+                if surface.as_deref() == Some(target) {
+                    pending.push(id.to_owned());
+                }
+            } else if let Some(target) = &surface {
+                if request.starts_with(&format!("{target}.attach(")) {
+                    attached = !request.contains("(nil");
+                } else if request == format!("{target}.commit()") {
+                    // The feedback asked goes with this commit, a frame only if it brought a buffer.
+                    let frame = attached.then(|| {
+                        frames.push(Fate::Unknown);
+                        frames.len() - 1
+                    });
+                    for id in pending.drain(..) {
+                        asked.insert(id, frame);
+                    }
+                    attached = false;
+                }
+            }
             continue;
         }
-        let Some((_, message)) = line.split_once("wp_presentation_feedback") else {
+        // `{Default Queue} wp_presentation_feedback#73.presented(0, 44231, 767818000, ...)`
+        let Some(start) = line.find("wp_presentation_feedback#") else {
             continue;
         };
-        if message.ends_with(".discarded()") {
-            feedback.discarded += 1;
-        } else if let Some(arguments) = message
-            .split_once(".presented(")
-            .and_then(|(_, rest)| rest.strip_suffix(')'))
-            && let Some(presented) = presented(arguments)
-        {
-            // Another feedback object's answer for the same commit.
-            if feedback.presented.last().map(|last| last.at_ns) != Some(presented.at_ns) {
-                feedback.presented.push(presented);
-            }
+        let message = &line[start..];
+        let Some((id, event)) = message.split_once('.') else {
+            continue;
+        };
+        // `sync_output` comes first and says nothing of the frame's fate.
+        if !(event == "discarded()" || event.starts_with("presented(")) {
+            continue;
+        }
+        let Some(Some(frame)) = asked.remove(id) else {
+            continue;
+        };
+        let fate = if event == "discarded()" {
+            Some(Fate::Discarded)
+        } else {
+            event
+                .strip_prefix("presented(")
+                .and_then(|arguments| arguments.strip_suffix(')'))
+                .and_then(presented)
+                .map(Fate::Presented)
+        };
+        if let (Some(fate), Some(slot)) = (fate, frames.get_mut(frame)) {
+            *slot = fate;
         }
     }
-    feedback
+    frames
 }
 
 /// The arguments of `presented`: `tv_sec_hi, tv_sec_lo, tv_nsec, refresh, seq_hi, seq_lo, flags`.
@@ -95,77 +153,112 @@ fn presented(arguments: &str) -> Option<Presented> {
     })
 }
 
-/// The figures of the frames presented from `settle` seconds after the first one: the first
-/// seconds after a start settle the clock, as for mpv's own figures.
-pub fn figures(feedback: &Feedback, settle: f64) -> Value {
-    let Some(first) = feedback.presented.first() else {
-        return json!({"presented": 0, "discarded": feedback.discarded});
+/// The figures of the frames from `settle` seconds after the first one presented: the first
+/// seconds after a start settle the clock, as for mpv's own figures. `frame_rate` is the frames'
+/// rate on screen, the clip's rate times mpv's speed correction, for the ideal gap; without it,
+/// the mean gap stands for the ideal.
+pub fn figures(frames: &[Fate], settle: f64, frame_rate: Option<f64>) -> Value {
+    let presented_at = |fate: &Fate| match fate {
+        Fate::Presented(presented) => Some(presented.at_ns),
+        _ => None,
     };
-    let settle_ns = (settle * 1e9) as u128;
-    let frames: Vec<Presented> = feedback
-        .presented
+    let Some(first) = frames.iter().find_map(presented_at) else {
+        return json!({"frames": frames.len(), "presented": 0});
+    };
+    let settled = first + (settle * 1e9) as u128;
+    let Some(start) = frames
         .iter()
-        .copied()
-        .filter(|frame| frame.at_ns >= first.at_ns + settle_ns)
-        .collect();
-    let (Some(start), Some(end)) = (frames.first(), frames.last()) else {
-        return json!({"presented": 0, "discarded": feedback.discarded});
+        .position(|fate| presented_at(fate).is_some_and(|at| at >= settled))
+    else {
+        return json!({"frames": frames.len(), "presented": 0});
     };
-    let span = (end.at_ns - start.at_ns) as f64 / 1e9;
-    let intervals: Vec<f64> = frames
-        .windows(2)
-        .map(|pair| (pair[1].at_ns - pair[0].at_ns) as f64 / 1e6)
+    let frames = &frames[start..];
+    let shown: Vec<Presented> = frames
+        .iter()
+        .filter_map(|fate| match fate {
+            Fate::Presented(presented) => Some(*presented),
+            _ => None,
+        })
         .collect();
-    let refreshes: Vec<f64> = frames
+    let discarded = frames
+        .iter()
+        .filter(|fate| **fate == Fate::Discarded)
+        .count();
+    // Pairs of frames committed one after the other, both presented.
+    let pairs: Vec<(Presented, Presented)> = frames
+        .windows(2)
+        .filter_map(|pair| match pair {
+            [Fate::Presented(before), Fate::Presented(after)] => Some((*before, *after)),
+            _ => None,
+        })
+        .collect();
+    let mut gaps = BTreeMap::new();
+    for (before, after) in &pairs {
+        // A counter that goes back, or none at all, gives no gap.
+        if after.msc > before.msc && before.msc > 0 {
+            *gaps.entry(after.msc - before.msc).or_insert(0_u64) += 1;
+        }
+    }
+    let intervals: Vec<f64> = pairs
+        .iter()
+        .map(|(before, after)| after.at_ns.saturating_sub(before.at_ns) as f64 / 1e6)
+        .collect();
+    let refreshes: Vec<f64> = shown
         .iter()
         .filter(|frame| frame.refresh_ns > 0)
         .map(|frame| f64::from(frame.refresh_ns) / 1e6)
         .collect();
-    let zero_copy = frames
-        .iter()
-        .filter(|frame| frame.flags & ZERO_COPY != 0)
-        .count();
+    let refresh_ms = figures::quantile(refreshes, 0.5);
+    let ideal = refresh_ms
+        .zip(frame_rate)
+        .filter(|(refresh, rate)| *refresh > 0.0 && *rate > 0.0)
+        .map(|(refresh, rate)| 1000.0 / refresh / rate);
+    let span = match (shown.first(), shown.last()) {
+        (Some(first), Some(last)) => (last.at_ns - first.at_ns) as f64 / 1e9,
+        _ => 0.0,
+    };
+    // The frames committed from the first shown to the last, for the rate.
+    let last_shown = frames.iter().rposition(|fate| presented_at(fate).is_some());
+    let committed_over_span = last_shown.unwrap_or(0);
     json!({
-        "presented": frames.len(),
-        "discarded": feedback.discarded,
+        "frames": frames.len(),
+        "presented": shown.len(),
+        "discarded": discarded,
+        "without_feedback": frames.len() - shown.len() - discarded,
         "seconds": figures::round(span, 1),
-        "per_second": (span > 0.0).then(|| figures::round((frames.len() - 1) as f64 / span, 3)),
-        "zero_copy": zero_copy,
-        "refresh_ms": figures::quantile(refreshes, 0.5).map(|ms| figures::round(ms, 4)),
-        "refresh_gaps": refresh_gaps(&frames),
+        "frames_per_second": (span > 0.0).then(|| figures::round(committed_over_span as f64 / span, 3)),
+        "zero_copy": shown.iter().filter(|frame| frame.flags & ZERO_COPY != 0).count(),
+        "refresh_ms": refresh_ms.map(|ms| figures::round(ms, 4)),
+        "refresh_gaps": gap_figures(&gaps, ideal),
         "intervals_ms": interval_figures(intervals),
     })
 }
 
-/// The refresh gaps between frames presented one after the other: their counts by length, their
-/// mean, and the frames off cadence. `null` when the compositor gives no refresh counter. A
-/// counter that goes back (an output changed) starts the gaps again.
-fn refresh_gaps(frames: &[Presented]) -> Value {
-    if frames.iter().all(|frame| frame.msc == 0) {
+/// The figures of refresh gaps counted by length: their counts, their mean, the ideal gap
+/// (`ideal`, or the mean without it) and the gaps off cadence (the module's documentation says
+/// how they are counted). `null` without any gap.
+pub fn gap_figures(counts: &BTreeMap<u64, u64>, ideal: Option<f64>) -> Value {
+    let total: u64 = counts.values().sum();
+    if total == 0 {
         return Value::Null;
     }
-    let gaps: Vec<u64> = frames
-        .windows(2)
-        .filter(|pair| pair[1].msc > pair[0].msc)
-        .map(|pair| pair[1].msc - pair[0].msc)
-        .collect();
-    if gaps.is_empty() {
-        return Value::Null;
-    }
-    let mean = gaps.iter().sum::<u64>() as f64 / gaps.len() as f64;
-    let (low, high) = (mean.floor() as u64, mean.ceil() as u64);
-    let off_cadence = gaps
-        .iter()
-        .filter(|&&gap| gap != low && gap != high)
-        .count();
-    let mut counts = std::collections::BTreeMap::new();
-    for gap in &gaps {
-        *counts.entry(*gap).or_insert(0_u64) += 1;
-    }
+    let mean = counts.iter().map(|(gap, count)| gap * count).sum::<u64>() as f64 / total as f64;
+    let ideal = ideal.unwrap_or(mean);
+    let (low, high) = (ideal.floor() as u64, ideal.ceil() as u64);
+    let fraction = ideal - ideal.floor();
+    let count_of = |gap: u64| counts.get(&gap).copied().unwrap_or(0) as f64;
+    let n = total as f64;
+    let on_cadence = if low == high {
+        count_of(low)
+    } else {
+        count_of(low).min((1.0 - fraction) * n) + count_of(high).min(fraction * n)
+    };
     json!({
+        "gaps": total,
         "mean": figures::round(mean, 4),
+        "ideal": figures::round(ideal, 4),
         "counts": counts.iter().map(|(gap, count)| (gap.to_string(), json!(count))).collect::<serde_json::Map<_, _>>(),
-        "off_cadence": off_cadence,
+        "off_cadence": (n - on_cadence).round() as u64,
     })
 }
 
@@ -182,108 +275,157 @@ fn interval_figures(intervals: Vec<f64>) -> Value {
 mod tests {
     use super::*;
 
-    /// A line as libwayland 1.24 prints it, for a frame presented at `ms` milliseconds.
-    fn line(id: u32, ms: u64, msc: u64, flags: u32) -> String {
+    /// The lines of one frame as mpv and Mesa print them with libwayland 1.24: the feedback mpv
+    /// asked, as `feedback`, then the driver's attach and commit.
+    fn commit(feedback: Option<u32>) -> Vec<String> {
+        let mut lines = Vec::new();
+        if let Some(id) = feedback {
+            lines.push(format!(
+                "[01:20:09.409060] {{Default Queue}}  -> wp_presentation#17.feedback(wl_surface#8, new id wp_presentation_feedback#{id})"
+            ));
+        }
+        lines.push(
+            "[01:20:09.450636] {mesa vk display queue}  -> wl_surface#8.attach(wl_buffer#83, 0, 0)"
+                .to_owned(),
+        );
+        lines.push("[01:20:09.450644] {mesa vk display queue}  -> wl_surface#8.damage_buffer(0, 0, 2147483647, 2147483647)".to_owned());
+        lines
+            .push("[01:20:09.450651] {mesa vk display queue}  -> wl_surface#8.commit()".to_owned());
+        lines
+    }
+
+    /// The compositor's answer to feedback `id`: presented at `ms` milliseconds, refresh `msc`.
+    fn presented_line(id: u32, ms: u64, msc: u64, flags: u32) -> String {
         let (seconds, nanoseconds) = (ms / 1000, (ms % 1000) * 1_000_000);
         format!(
-            "[00:29:28.309227] {{Default Queue}} wp_presentation_feedback#{id}.presented(0, {seconds}, {nanoseconds}, 4166389, 0, {msc}, {flags})"
+            "[01:20:09.451127] {{Default Queue}} wp_presentation_feedback#{id}.presented(0, {seconds}, {nanoseconds}, 4166388, 0, {msc}, {flags})"
         )
     }
 
+    /// A log of frames each with feedback, presented at the refreshes `mscs`, 42 ms apart.
+    fn log_of(mscs: &[u64], flags: u32) -> String {
+        let mut lines = Vec::new();
+        for (index, msc) in mscs.iter().enumerate() {
+            let id = 70 + (index as u32 % 2);
+            lines.extend(commit(Some(id)));
+            lines.push(presented_line(id, 1000 + 42 * index as u64, *msc, flags));
+        }
+        lines.join("\n")
+    }
+
     #[test]
-    fn presented_and_discarded_frames_are_read_and_requests_skipped() {
-        let log = [
-            "[00:29:28.117932] {Default Queue}  -> wp_presentation#17.feedback(wl_surface#6, new id wp_presentation_feedback#62)".to_owned(),
-            line(62, 1000, 240, 0x7),
-            "Playing: clip.mkv".to_owned(),
-            "[00:29:28.403552] {Default Queue} wp_presentation_feedback#66.discarded()".to_owned(),
-            "[00:29:28.403552] {Default Queue} discarded wl_seat#5.name(\"seat0\")".to_owned(),
-            line(64, 1042, 250, 0xf),
-            "[00:29:28.403552] {Default Queue} wp_presentation_feedback#70.presented(0, 1".to_owned(),
-        ]
-        .join("\n");
-        let feedback = parse(&log);
-        assert_eq!(feedback.discarded, 1);
+    fn each_frame_gets_the_answer_to_the_feedback_asked_before_its_commit() {
+        let mut lines = commit(Some(73));
+        lines.extend(commit(None));
+        lines.push("Playing: clip.mkv".to_owned());
+        lines.push("[01:20:09.451118] {Default Queue} wp_presentation_feedback#73.sync_output(wl_output#30)".to_owned());
+        lines.push(presented_line(73, 1000, 240, 0x7));
+        lines.extend(commit(Some(73)));
+        lines.push(
+            "[01:20:09.451] {Default Queue} wp_presentation_feedback#73.discarded()".to_owned(),
+        );
+        lines.push("[01:20:09.451] {Default Queue} discarded wl_seat#5.name(\"seat0\")".to_owned());
+        let frames = parse(&lines.join("\n"));
         assert_eq!(
-            feedback.presented,
+            frames,
             [
-                Presented {
+                Fate::Presented(Presented {
                     at_ns: 1_000_000_000,
-                    refresh_ns: 4_166_389,
+                    refresh_ns: 4_166_388,
                     msc: 240,
                     flags: 0x7
-                },
-                Presented {
-                    at_ns: 1_042_000_000,
-                    refresh_ns: 4_166_389,
-                    msc: 250,
-                    flags: 0xf
-                },
+                }),
+                Fate::Unknown,
+                Fate::Discarded,
             ]
         );
     }
 
     #[test]
-    fn two_answers_for_one_commit_count_one_frame() {
-        let log = [
-            line(62, 1000, 240, 0),
-            line(63, 1000, 240, 0),
-            line(64, 1042, 250, 0),
-        ]
-        .join("\n");
-        assert_eq!(parse(&log).presented.len(), 2);
+    fn a_commit_without_a_buffer_is_no_frame_and_takes_the_feedback_asked() {
+        let mut lines = vec![
+            "[0] {Default Queue}  -> wp_presentation#17.feedback(wl_surface#8, new id wp_presentation_feedback#73)".to_owned(),
+            "[0] {Default Queue}  -> wl_surface#8.commit()".to_owned(),
+            presented_line(73, 1000, 240, 0),
+        ];
+        lines.extend(commit(None));
+        assert_eq!(parse(&lines.join("\n")), [Fate::Unknown]);
     }
 
     #[test]
-    fn gaps_off_the_two_around_the_mean_are_off_cadence() {
-        // 10, 10, 11, 10, 9, 10, 12: a mean of 10.29, so 10 and 11 are on cadence; 9 and 12 are not.
-        let mut msc = 1000;
-        let mut lines = vec![line(1, 0, msc, 0)];
-        for (index, gap) in [10, 10, 11, 10, 9, 10, 12].into_iter().enumerate() {
-            msc += gap;
-            lines.push(line(2, 100 + 42 * index as u64, msc, 0));
+    fn gaps_off_the_ideal_pattern_are_off_cadence() {
+        // 10, 10, 11, 10, 9, 10, 12.
+        let mut mscs = vec![1000];
+        for gap in [10, 10, 11, 10, 9, 10, 12] {
+            mscs.push(mscs.last().unwrap() + gap);
         }
-        let figures = figures(&parse(&lines.join("\n")), 0.0);
+        let figures = figures(&parse(&log_of(&mscs, 0)), 0.0, None);
         let gaps = &figures["refresh_gaps"];
+        // The mean, 10.29, stands for the ideal: of 7 gaps, 5 of 10 and 2 of 11.
         assert_eq!(gaps["off_cadence"], 2);
+        assert_eq!(gaps["gaps"], 7);
         assert_eq!(gaps["counts"], json!({"9": 1, "10": 4, "11": 1, "12": 1}));
         assert_eq!(figures["presented"], 8);
+        // At 240.016 Hz for 23.976 frames a second: 10 is the ideal, 11 once in 93. The 9 and its
+        // 11, and the 12, are off cadence.
+        let at_film_rate = super::figures(&parse(&log_of(&mscs, 0)), 0.0, Some(240.016 / 10.0107));
+        assert_eq!(at_film_rate["refresh_gaps"]["off_cadence"], 3);
+    }
+
+    #[test]
+    fn a_9_and_an_11_around_a_10_are_two_gaps_off_cadence() {
+        let mut counts = BTreeMap::new();
+        counts.insert(10, 91);
+        counts.insert(9, 4);
+        counts.insert(11, 5);
+        // The ideal has one 11 in 100: 99 tens and one eleven.
+        let figures = gap_figures(&counts, Some(10.01));
+        assert_eq!(figures["off_cadence"], 8);
+        assert_eq!(gap_figures(&BTreeMap::new(), None), Value::Null);
+    }
+
+    #[test]
+    fn a_frame_without_feedback_breaks_the_gap_rather_than_doubling_it() {
+        let mut lines = commit(Some(70));
+        lines.push(presented_line(70, 1000, 1000, 0));
+        lines.extend(commit(None));
+        lines.extend(commit(Some(71)));
+        lines.push(presented_line(71, 1083, 1020, 0));
+        lines.extend(commit(Some(70)));
+        lines.push(presented_line(70, 1125, 1030, 0));
+        let figures = figures(&parse(&lines.join("\n")), 0.0, None);
+        assert_eq!(figures["refresh_gaps"]["counts"], json!({"10": 1}));
+        assert_eq!(figures["without_feedback"], 1);
+        assert_eq!(figures["frames"], 4);
     }
 
     #[test]
     fn a_whole_mean_leaves_only_that_gap_on_cadence() {
-        let lines: Vec<String> = (0..5).map(|n| line(1, n * 42, 1000 + n * 10, 0)).collect();
-        let figures = figures(&parse(&lines.join("\n")), 0.0);
+        let mscs: Vec<u64> = (0..5).map(|n| 1000 + n * 10).collect();
+        let figures = figures(&parse(&log_of(&mscs, 0)), 0.0, None);
         assert_eq!(figures["refresh_gaps"]["off_cadence"], 0);
         assert_eq!(figures["refresh_gaps"]["mean"], 10.0);
     }
 
     #[test]
     fn the_first_seconds_settle_and_zero_copy_is_counted() {
-        let lines = [
-            line(1, 0, 1, 0),
-            line(1, 1000, 241, 0),
-            line(1, 2000, 481, ZERO_COPY),
-            line(1, 2050, 493, ZERO_COPY | 0x1),
-            line(1, 2100, 505, 0),
-        ];
-        let figures = figures(&parse(&lines.join("\n")), 2.0);
-        assert_eq!(figures["presented"], 3);
-        assert_eq!(figures["zero_copy"], 2);
-        assert_eq!(figures["intervals_ms"]["p50"], 50.0);
-        assert_eq!(figures["per_second"], 20.0);
+        // Frames 42 ms apart from 1 s: those before 2 s after the first are left out.
+        let mscs: Vec<u64> = (0..60).map(|n| 1000 + n * 10).collect();
+        let figures = figures(&parse(&log_of(&mscs, ZERO_COPY)), 2.0, None);
+        assert_eq!(figures["presented"], 12);
+        assert_eq!(figures["zero_copy"], 12);
+        assert_eq!(figures["intervals_ms"]["p50"], 42.0);
     }
 
     #[test]
     fn without_a_refresh_counter_there_are_no_gaps() {
-        let lines: Vec<String> = (0..3).map(|n| line(1, n * 42, 0, 0)).collect();
-        let figures = figures(&parse(&lines.join("\n")), 0.0);
+        let figures = figures(&parse(&log_of(&[0, 0, 0], 0)), 0.0, None);
         assert_eq!(figures["refresh_gaps"], Value::Null);
         assert_eq!(figures["presented"], 3);
     }
 
     #[test]
     fn an_empty_log_has_no_frames() {
-        assert_eq!(figures(&parse(""), 2.0)["presented"], 0);
+        assert_eq!(figures(&parse(""), 2.0, None)["presented"], 0);
     }
 }

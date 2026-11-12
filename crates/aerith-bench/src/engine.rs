@@ -27,7 +27,7 @@ const ANSWER: Duration = Duration::from_secs(5);
 const FIRST_FRAME: Duration = Duration::from_secs(60);
 
 /// mpv's counters and figures that the bench reads every second, by property name.
-pub const MPV_COUNTERS: [&str; 7] = [
+pub const MPV_COUNTERS: [&str; 8] = [
     "frame-drop-count",
     "decoder-frame-drop-count",
     "vo-delayed-frame-count",
@@ -35,11 +35,13 @@ pub const MPV_COUNTERS: [&str; 7] = [
     "avsync",
     "time-pos",
     "estimated-display-fps",
+    "video-speed-correction",
 ];
 
 /// What mpv reports once the clip plays: the engine's own view of what it decodes and outputs.
-const MPV_REPORT: [&str; 17] = [
+const MPV_REPORT: [&str; 18] = [
     "mpv-version",
+    "container-fps",
     "ffmpeg-version",
     "current-vo",
     "current-gpu-context",

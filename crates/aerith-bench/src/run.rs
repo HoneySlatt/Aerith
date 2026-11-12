@@ -164,14 +164,27 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
                "source": "mpv's properties, read over its IPC"})
     };
     let machine = figures::machine_figures(&playing, idle);
+    // The frames' rate on screen: the clip's, times mpv's correction under display sync.
+    let frame_rate = played.report["container-fps"]
+        .as_f64()
+        .map(|rate| rate * last("video-speed-correction").as_f64().unwrap_or(1.0));
     let presentation = match (&wayland_log, played.wayland_window) {
-        (Some(log), Some(window)) => {
-            presentation::figures(&presentation::parse(&read_window(log, window)?), SETTLE)
-        }
+        (Some(log), Some(window)) => presentation::figures(
+            &presentation::parse(&read_window(log, window)?),
+            SETTLE,
+            frame_rate,
+        ),
         _ => Value::Null,
     };
+    let ideal_gap = presentation["refresh_ms"]
+        .as_f64()
+        .zip(frame_rate)
+        .map(|(refresh, rate)| 1000.0 / refresh / rate);
     let testbed = if options.rival == Rival::Aerith {
-        testbed_figures(&fs::read_to_string(directory.join("player.log")).unwrap_or_default())
+        testbed_figures(
+            &fs::read_to_string(directory.join("player.log")).unwrap_or_default(),
+            ideal_gap,
+        )
     } else {
         Value::Null
     };
@@ -456,9 +469,10 @@ fn wait_exit(child: &mut std::process::Child, timeout: Duration) {
 }
 
 /// What Aerith's testbed printed with `--stats` (its crate's documentation gives the format):
-/// its summary, and the wake-ups a second of the window's thread and of the relay's between the
-/// line 2 s after the open and the last one.
-fn testbed_figures(stats: &str) -> Value {
+/// its summary, and between the line 2 s after the open and the last one, the wake-ups a second
+/// of the window's thread and of the relay's, and the relay's count of what the compositor
+/// presented, with feedback on every frame, its gaps against `ideal_gap`.
+fn testbed_figures(stats: &str, ideal_gap: Option<f64>) -> Value {
     let lines: Vec<Value> = stats
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
@@ -494,10 +508,50 @@ fn testbed_figures(stats: &str) -> Value {
             _ => Value::Null,
         }
     };
+    let relay = match (first, last) {
+        (Some(first), Some(last)) => {
+            relay_presentation(&first["presentation"], &last["presentation"], ideal_gap)
+        }
+        _ => Value::Null,
+    };
     json!({
         "summary": summary,
         "last": last.map(|line| (*line).clone()),
         "wake_ups_per_second": {"main_thread": rate("main_thread"), "relay_thread": rate("relay_thread")},
+        "relay_presentation": relay,
+    })
+}
+
+/// The relay's `Presentation` between two of the testbed's lines: frames presented, scanned out,
+/// discarded, and the refresh gaps, the longer ones counted as gaps of `COUNTED_GAPS`.
+fn relay_presentation(first: &Value, last: &Value, ideal_gap: Option<f64>) -> Value {
+    let between = |name: &str| {
+        last[name]
+            .as_u64()
+            .zip(first[name].as_u64())
+            .map(|(end, start)| end.saturating_sub(start))
+    };
+    let (Some(before), Some(after)) = (first["gaps"].as_array(), last["gaps"].as_array()) else {
+        return Value::Null;
+    };
+    let mut gaps = std::collections::BTreeMap::new();
+    for (length, (start, end)) in before.iter().zip(after).enumerate() {
+        let count = end
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(start.as_u64().unwrap_or(0));
+        if count > 0 {
+            gaps.insert(length as u64, count);
+        }
+    }
+    if let Some(longer) = between("longer_gaps").filter(|count| *count > 0) {
+        gaps.insert(after.len() as u64, longer);
+    }
+    json!({
+        "presented": between("presented"),
+        "zero_copy": between("zero_copy"),
+        "discarded": between("discarded"),
+        "refresh_gaps": presentation::gap_figures(&gaps, ideal_gap),
     })
 }
 
@@ -542,25 +596,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_testbeds_wake_ups_are_counted_from_two_seconds_after_the_open() {
-        let line = |at: f64, main: u64, relay: u64| {
+    fn the_testbeds_figures_are_counted_from_two_seconds_after_the_open() {
+        // A line of `--stats`: its threads' wake-ups, and the relay's frames presented with the
+        // gaps of 9, 10 and 11 refreshes and those of 32 or more.
+        let line = |at: f64, main: u64, relay: u64, presented: u64, gaps: [u64; 3], longer: u64| {
+            let mut counts = vec![0_u64; 32];
+            counts[9..12].copy_from_slice(&gaps);
             format!(
-                "{{\"since_open\":{at},\"main_thread\":{{\"voluntary\":{main},\"involuntary\":0}},\"relay_thread\":{{\"voluntary\":{relay},\"involuntary\":0}}}}"
+                "{{\"since_open\":{at},\"presentation\":{{\"committed\":{presented},\"presented\":{presented},\"discarded\":0,\"zero_copy\":{presented},\"gaps\":{counts:?},\"longer_gaps\":{longer}}},\"main_thread\":{{\"voluntary\":{main},\"involuntary\":0}},\"relay_thread\":{{\"voluntary\":{relay},\"involuntary\":0}}}}"
             )
         };
         let stats = [
-            line(1.0, 10, 10),
-            line(2.0, 100, 200),
+            line(1.0, 10, 10, 20, [0, 19, 0], 0),
+            line(2.0, 100, 200, 44, [1, 40, 2], 0),
             "first frame after 70 ms".to_owned(),
-            line(4.0, 200, 500),
+            line(4.0, 200, 500, 92, [2, 85, 3], 1),
             "{\"summary\":true,\"first_frame_ms\":70.1,\"since_open\":4.5}".to_owned(),
         ]
         .join("\n");
-        let figures = testbed_figures(&stats);
+        let figures = testbed_figures(&stats, Some(10.0));
         assert_eq!(figures["wake_ups_per_second"]["main_thread"], 50.0);
         assert_eq!(figures["wake_ups_per_second"]["relay_thread"], 150.0);
         assert_eq!(figures["summary"]["first_frame_ms"], 70.1);
         assert_eq!(figures["last"]["since_open"], 4.0);
-        assert!(testbed_figures("")["wake_ups_per_second"]["main_thread"].is_null());
+        let relay = &figures["relay_presentation"];
+        assert_eq!(relay["presented"], 48);
+        assert_eq!(relay["zero_copy"], 48);
+        assert_eq!(
+            relay["refresh_gaps"]["counts"],
+            json!({"9": 1, "10": 45, "11": 1, "32": 1})
+        );
+        // Of 48 gaps, the ideal holds 48 of 10: the 9, the 11 and the 32 are off cadence.
+        assert_eq!(relay["refresh_gaps"]["off_cadence"], 3);
+        assert!(testbed_figures("", None)["wake_ups_per_second"]["main_thread"].is_null());
     }
 }

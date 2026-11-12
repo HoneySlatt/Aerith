@@ -10,6 +10,7 @@
 //!                  [--display TEXT] [--mpv-option NAME=VALUE]...
 //!                  [--order below|above] [--toggle-controls N] [--frames T,T...]
 //! aerith-bench table <result.json>...
+//! aerith-bench presentation <Wayland log> [frames a second]
 //! ```
 //!
 //! `CONTRIBUTING.md` says how to run it, on which display and through which wrapper. It runs on
@@ -47,13 +48,15 @@ const USAGE: &str = "usage:
   aerith-bench run <mpv|kodi|stremio|jellyfin|aerith> <clip> [--stream] [--seconds N]
                    [--idle N] [--out DIR] [--display TEXT] [--mpv-option NAME=VALUE]...
                    [--order below|above] [--toggle-controls N] [--frames T,T...]
-  aerith-bench table <result.json>...";
+  aerith-bench table <result.json>...
+  aerith-bench presentation <Wayland log> [frames a second]";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
         Some("run") => run_command(&arguments[1..]),
         Some("table") => table_command(&arguments[1..]),
+        Some("presentation") => presentation_command(&arguments[1..]),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -109,6 +112,11 @@ const RESERVED_MPV_OPTIONS: [&str; 9] = [
 fn run_command(_arguments: &[String]) -> ExitCode {
     eprintln!("aerith-bench runs on Linux only for now; Windows joins at milestone M1.6");
     ExitCode::FAILURE
+}
+
+#[cfg(not(target_os = "linux"))]
+fn presentation_command(arguments: &[String]) -> ExitCode {
+    run_command(arguments)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -227,6 +235,38 @@ fn parse_run(arguments: &[String]) -> Result<run::RunOptions, String> {
         stream,
         idle,
     })
+}
+
+/// Prints the presentation figures of a Wayland log that a run kept (`player.err` for mpv alone,
+/// `mpv-wayland.log` for Aerith), all of it, the first two seconds left out, against the frames'
+/// rate on screen when it is given.
+#[cfg(target_os = "linux")]
+fn presentation_command(arguments: &[String]) -> ExitCode {
+    let (path, frame_rate) = match arguments {
+        [path] => (path, None),
+        [path, rate] => match rate.parse::<f64>() {
+            Ok(rate) if rate > 0.0 => (path, Some(rate)),
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let frames = presentation::parse(&String::from_utf8_lossy(&bytes));
+            println!("{}", presentation::figures(&frames, 2.0, frame_rate));
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{path}: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Prints the Markdown table that compares the runs whose results are given.
