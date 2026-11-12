@@ -205,11 +205,18 @@ Aerith's window under a test interface, measured against the rivals. Planned by
     cadence at 25 fps, not at 23.976 and 59.94 fps on 240 Hz, where only display sync holds it.
     Under fifo, mpv's own feedback covers one frame in two: mpv alone's cadence is not measured
     there; the relay's count, by time on KWin, covers Aerith's.
+  - With VRR, under KWin, beside another session's load
+    ([figures](measurements.md#with-vrr-under-kwin)): 4 % to 19 % of Aerith's frames show more
+    than half a refresh early or late, mpv alone's 6 % to 33 %: no player keeps an even cadence
+    under audio sync. To take again quiet; display sync under VRR not measured.
+  - The order of the surfaces decided on 2026-11-12: the video above a black root
+    ([ADR-0019](adr/0019-the-video-above-a-black-root.md)), to be confirmed in a uwui session.
+    What measuring changed in the relay: [ADR-0020](adr/0020-what-measuring-the-relay-changed.md).
   - Stopped on 2026-11-12 by the owner's choice. Left, in order, each on the owner's screen and go:
-    1. 60 Hz, then VRR, which the owner sets: `scripts/bench-window.sh` at each;
+    1. 60 Hz, which the owner sets: `scripts/bench-window.sh` there; VRR again on a quiet machine,
+       with display sync too;
     2. the floor's 30 minutes, the owner's call;
-    3. the decisions, each an ADR: the order of the surfaces, with a uwui session; the rule of
-       display sync;
+    3. the rule of display sync, an ADR: the owner decides it with the 60 Hz and VRR figures;
     4. the closing review.
   - Still to put to the owner from M1.4a: ADR-0018's validation, `rustix` as a direct
     dependency of the player, a short fuzzing pass in CI, and the window thread's wake-ups during

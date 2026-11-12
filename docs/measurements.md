@@ -586,3 +586,56 @@ was scanned out by KWin too (611 to 1,802 frames of every run); the order below 
   on either side of it. Display sync is what holds such a cadence.
 - The order above is scanned out by KWin as by Umbriel, and had fewer gaps off cadence here.
 - The run of mpv alone on DP-3 gave no gap: its feedback, one frame in two, leaves none to measure.
+
+### With VRR, under KWin
+
+Measured on 2026-11-12 from 06:24 to 07:12 CET on the owner's desktop in a Plasma session, through
+`owner-desktop`: DP-3, adaptive sync on "Automatic" (VRR for fullscreen windows, up to 240.02 Hz),
+scale 1.45, KWin 6.8, fifo passed to mpv. Another session kept 0.5 to 8.6 hardware threads busy:
+these are not quiet figures. The owner stopped the series once, at its fourth run; it was taken
+up where it stopped. `window-20261112T062420Z`, kept outside the repository.
+
+**VRR was on.** At a fixed rate, every interval between two presented frames is a whole number of
+refreshes (100 % of them in the KWin runs at 240 Hz above); in this series 2 % to 12 % are, as
+frames show between the fixed rate's refreshes.
+
+KWin still sends a refresh period of 4.17 ms and no refresh counter, so refresh gaps say nothing
+here. The bench's `timing` figure measures instead the time between two presented frames, `k`
+frames apart, against `k` frame periods ([`presentation.rs`](../crates/aerith-bench/src/presentation.rs));
+under fifo most spans are of two frames. Read with `aerith-bench presentation <log> <rate>`.
+
+| Clip | Player | Spans off by more than half a refresh (2.1 ms) | More than one (4.2 ms) | Worst | Scanned out | GPU power over idle | Other programs, threads |
+|---|---|---|---|---|---|---|---|
+| cadence-23.976 | mpv alone | 69 of 731 | 23 | 28.0 ms | 726 of 726 | 1.94 W | 5.4 |
+| cadence-23.976 | aerith, below | 101 of 721 | 26 | 17.0 ms | 0 of 697 | 2.25 W | 4.9 |
+| cadence-23.976 | aerith, above | 89 of 733 | 40 | 14.5 ms | 683 of 708 | 2.08 W | 6.28 |
+| cadence-24 | mpv alone | 55 of 729 | 24 | 13.4 ms | 692 of 717 | 1.2 W | 8.58 |
+| cadence-24 | aerith, below | 27 of 719 | 18 | 13.1 ms | 0 of 695 | 2.34 W | 1.56 |
+| cadence-24 | aerith, above | 39 of 719 | 24 | 14.2 ms | 670 of 695 | 4.53 W | 0.51 |
+| cadence-25 | mpv alone | 69 of 794 | 34 | 13.4 ms | 789 of 789 | 2.56 W | 3.87 |
+| cadence-25 | aerith, below | 70 of 751 | 41 | 23.3 ms | 0 of 724 | 2.28 W | 3.34 |
+| cadence-25 | aerith, above | 113 of 760 | 48 | 22.0 ms | 710 of 734 | 2.11 W | 6.56 |
+| cadence-29.97 | mpv alone | 107 of 897 | 44 | 22.7 ms | 891 of 891 | 2.88 W | 5.57 |
+| cadence-29.97 | aerith, below | 113 of 899 | 42 | 11.7 ms | 0 of 869 | 3.13 W | 5.56 |
+| cadence-29.97 | aerith, above | 140 of 901 | 27 | 15.0 ms | 871 of 871 | 2.98 W | 5.89 |
+| cadence-50 | mpv alone | 99 of 1486 | 11 | 9.9 ms | 1475 of 1475 | 4.72 W | 5.34 |
+| cadence-50 | aerith, below | 132 of 1508 | 24 | 16.1 ms | 0 of 1457 | 4.18 W | 7.01 |
+| cadence-50 | aerith, above | 281 of 1516 | 140 | 35.9 ms | 1467 of 1467 | 4.62 W | 8.34 |
+| cadence-59.94 | mpv alone | 204 of 1817 | 91 | 30.8 ms | 1755 of 1755 | 5.03 W | 5.66 |
+| cadence-59.94 | aerith, below | 150 of 1801 | 44 | 16.6 ms | 0 of 1739 | 6.65 W | 5.9 |
+| cadence-59.94 | aerith, above | 118 of 1798 | 31 | 13.4 ms | 1738 of 1738 | 5.53 W | 5.2 |
+| cadence-60 | mpv alone | 178 of 1764 | 12 | 15.1 ms | 1755 of 1755 | 5.15 W | 4.73 |
+| cadence-60 | aerith, below | 173 of 1802 | 38 | 16.4 ms | 0 of 1741 | 6.18 W | 5.55 |
+| cadence-60 | aerith, above | 120 of 1821 | 19 | 10.1 ms | 1761 of 1761 | 5.53 W | 8.06 |
+| sdr-2160p-hevc10-eac3 | mpv alone | 227 of 679 | 115 | 28.0 ms | 671 of 671 | 2.94 W | 5.54 |
+| sdr-2160p-hevc10-eac3 | aerith, below | 46 of 660 | 30 | 14.8 ms | 0 of 636 | 2.82 W | 2.33 |
+| sdr-2160p-hevc10-eac3 | aerith, above | 27 of 659 | 24 | 12.0 ms | 611 of 636 | 3.26 W | 1.89 |
+
+- **No player keeps an even cadence under VRR here.** 4 % to 19 % of Aerith's spans, and 6 % to
+  33 % of mpv alone's, lie more than half a refresh from their frame periods; up to 36 ms for one.
+  Aerith does about as well as mpv alone. Under audio sync mpv times each frame itself, and the
+  compositor shows it when it comes; display sync under VRR is not measured.
+- KWin scanned mpv alone out too, in its own fullscreen window, and the order above; never the
+  order below.
+- The figures are under another session's load, which disturbs timing: to take again on a quiet
+  machine before they count against the floor.
