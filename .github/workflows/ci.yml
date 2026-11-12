@@ -38,6 +38,20 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: nix develop --no-update-lock-file --command scripts/check.sh
 
+  # A short pass of the relay's fuzz target (crates/aerith-player/fuzz), so that it keeps building
+  # and finds what a minute finds. It needs a nightly compiler, in a shell of its own (ADR-0011,
+  # ADR-0018); a crash fails the job and libFuzzer prints its input.
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - working-directory: crates/aerith-player
+        run: >-
+          nix develop ../..#fuzz --no-update-lock-file
+          --command cargo fuzz run relay -- -max_total_time=60 -timeout=10
+
   # Windows is a platform of Stage 1: the checks that read Rust code run there from the start, so that
   # code that builds on Linux alone, or documentation under `cfg(windows)`, is seen at once. The other
   # checks do not depend on the system. There is no Nix on Windows; rustup installs the toolchain that

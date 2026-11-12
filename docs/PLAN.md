@@ -226,9 +226,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
     ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). It is not built:
     the cadence floor is not met at a fixed rate until it is.
   - Left: the closing review. VRR on a quiet machine and the floor's 30 minutes go to M1.4c.
-  - Still to put to the owner from M1.4a: ADR-0018's validation, `rustix` as a direct
-    dependency of the player, a short fuzzing pass in CI, and the window thread's wake-ups during
-    playback against `wl-proxy`.
+  - M1.4a's open questions answered on 2026-11-12: ADR-0018 validated; `rustix` kept as a direct
+    dependency of the player; a minute of fuzzing in CI, in a job of its own; the window thread's
+    wake-ups kept until Stage 3.
 
 ### M1.4c — Display sync by the display's rate
 
@@ -310,8 +310,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   checks follow wlroots 0.20: other compositors may refuse what wlroots accepts.
 - `tests/plane.rs`, the relay with the real mpv, runs only with `AERITH_TEST_WAYLAND=1`: it needs
   lavapipe, and Mesa is 1.12 GB to add to every shell and CI job.
-- The relay's fuzz target runs by hand (`.#fuzz`), not in `scripts/check.sh` or CI; adding a short
-  run there is the owner's call, with the check's time.
+- The relay's fuzz target runs a minute in CI, in a job of its own, by the owner's choice of
+  2026-11-12; not in `scripts/check.sh`.
 - A hostile mpv can make Aerith hold about 410 file descriptors at a peak, and wayland-rs panics
   on two malformed messages that the relay refuses first: to raise upstream
   ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
@@ -329,9 +329,11 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   for Aerith, has every frame.
 - Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
   bits, and mpv alone does not: their frames differ by one step of 8 bits.
-- The window's thread wakes about 50 times a second while a film plays, for events addressed to
-  mpv on the socket it shares with the relay. `wl-proxy` would spare it
-  ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)); the owner weighs it.
+- The window's thread wakes 52 to 135 times a second while a film plays under audio sync, 280 to
+  580 under display sync at 240 Hz, for events addressed to mpv on the socket it shares with the
+  relay. `wl-proxy` would spare it ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)). By
+  the owner's choice of 2026-11-12, kept, and reopened at Stage 3 with the CPU time of uwui's
+  thread during a film.
 - mpv's window ready from the start costs 84 MiB while idle on the high tier; the lowest laptop is
   measured at M1.5.
 - The relay's thread wakes about 6 times for each frame of a 24 fps film (142 a second), with no
@@ -345,9 +347,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - No picture when mpv's Vulkan context fails after it connected, or when the compositor's
   linux-dmabuf is older than version 4: mpv's OpenGL fallback cannot open a second connection
   ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
-- The fuzz crate and the player's `fuzzing` feature are built by nothing in `scripts/check.sh` or
-  CI, and can break unnoticed. The 600 s run explored inputs of 198 bytes at most, about a dozen
-  messages.
+- The 600 s run of the fuzz target explored inputs of 198 bytes at most, about a dozen messages;
+  CI's minute explores less.
 - `scripts/test-check.sh` copies `.git` with tar: in a git worktree, where `.git` is a file, its
   cases stage scratch files in the worktree's own index.
 - `scripts/check.sh` grew from 33 s to over three minutes: `scripts/test-check.sh` runs the whole

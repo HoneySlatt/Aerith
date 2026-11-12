@@ -200,7 +200,8 @@ cargo fuzz run relay -- -max_total_time=600 -timeout=10
 ```
 
 It writes what it finds under `fuzz/corpus` and `fuzz/artifacts`, which git ignores. A crash is
-replayed with `cargo fuzz run relay <file>`. Neither `scripts/check.sh` nor CI runs it yet.
+replayed with `cargo fuzz run relay <file>`. CI runs it a minute, in a job of its own; `scripts/check.sh`
+does not.
 
 ## The checks
 
