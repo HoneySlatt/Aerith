@@ -177,6 +177,8 @@ pub struct Presentation {
     /// a film at 23.976 frames a second on a 240.016 Hz display shows each frame for 10
     /// refreshes, and one for 11 about every 3.9 s; a longer gap is a frame shown too long. Gaps of [`COUNTED_GAPS`] refreshes and more are in
     /// `longer_gaps`. A refresh counter that goes back (an output changed) starts the gaps again.
+    /// When the compositor keeps no refresh counter (KWin 6.8 sends 0), a gap is the time between
+    /// the two frames over the refresh period, rounded; with no period either, it is not counted.
     pub gaps: [u64; COUNTED_GAPS],
     /// Gaps of [`COUNTED_GAPS`] refreshes or more.
     pub longer_gaps: u64,

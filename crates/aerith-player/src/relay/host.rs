@@ -48,6 +48,7 @@ use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use wayland_server::Resource;
 use wayland_server::protocol::wl_callback::WlCallback as MpvCallback;
 
+use super::surface::Presented;
 use super::{Host, Output, State, check};
 
 /// The globals the relay binds on the window's connection.
@@ -697,7 +698,16 @@ impl Dispatch<WpPresentationFeedback, Vec<MpvFeedback>> for State {
                     WEnum::Unknown(bits) => bits,
                 };
                 let msc = (u64::from(seq_hi) << 32) | u64::from(seq_lo);
-                state.count_presented(msc, flags & Kind::ZeroCopy.bits() != 0);
+                let seconds = (u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo);
+                let at_ns = u128::from(seconds) * 1_000_000_000 + u128::from(tv_nsec);
+                state.count_presented(
+                    Presented {
+                        msc,
+                        at_ns,
+                        refresh_ns: refresh,
+                    },
+                    flags & Kind::ZeroCopy.bits() != 0,
+                );
                 for feedback in alive() {
                     feedback.presented(
                         tv_sec_hi,

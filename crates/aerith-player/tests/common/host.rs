@@ -98,6 +98,8 @@ pub struct Recorded {
     pub immediate_dmabufs: u32,
     /// The refresh counter of the last presentation.
     pub msc: u64,
+    /// Whether presentations carry no refresh counter, as KWin 6.8's do: only their time.
+    pub no_msc: bool,
     regions: HashMap<ObjectId, Vec<[i32; 4]>>,
     pools: HashMap<ObjectId, i32>,
     /// The dmabuf parameters objects alive, and the planes added to each.
@@ -211,10 +213,22 @@ impl Recorded {
             flags |= Kind::ZeroCopy;
         }
         let msc = self.msc;
+        // Each refresh 16,666,666 ns after the last, from 1 s.
+        let at = 1_000_000_000 + msc * 16_666_666;
+        let (seconds, nanoseconds) = ((at / 1_000_000_000) as u32, (at % 1_000_000_000) as u32);
+        let counter = if self.no_msc { 0 } else { msc };
         for surface in &mut self.surfaces {
             for feedback in surface.feedbacks.drain(..) {
                 if feedback.is_alive() {
-                    feedback.presented(0, 1, 0, 16_666_666, (msc >> 32) as u32, msc as u32, flags);
+                    feedback.presented(
+                        0,
+                        seconds,
+                        nanoseconds,
+                        16_666_666,
+                        (counter >> 32) as u32,
+                        counter as u32,
+                        flags,
+                    );
                 }
             }
         }

@@ -409,6 +409,24 @@ fn frame_callbacks_and_presentation_come_back_to_mpv_and_are_counted() {
 }
 
 #[test]
+fn without_a_refresh_counter_gaps_are_counted_by_time() {
+    let (host, _interface, plane, mut mpv, _failures, surface) = shown();
+    host.with(|recorded| recorded.no_msc = true);
+    let first = mpv.shm_buffer(64, 48);
+    let second = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &first);
+    mpv.wait("the first frame's feedback", |r| r.presented >= 1);
+    mpv.draw(&surface, &second);
+    mpv.wait("the second frame's", |r| r.presented >= 2);
+    let counts = plane.presentation();
+    assert!(
+        counts.gaps[1] >= 1,
+        "one refresh apart, by time: {counts:?}"
+    );
+    drop(host);
+}
+
+#[test]
 fn zero_copy_and_discarded_frames_are_counted() {
     let (host, _interface, plane, mut mpv, _failures, surface) = shown();
     host.with(|recorded| recorded.zero_copy = true);

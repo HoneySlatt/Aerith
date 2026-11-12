@@ -147,8 +147,8 @@ pub(super) struct State {
     toplevel: Option<shell::Toplevel>,
     serial: u32,
     presentation: Presentation,
-    /// The refresh the last frame was presented at.
-    last_msc: Option<u64>,
+    /// How the last frame was presented.
+    last_presented: Option<surface::Presented>,
     /// mpv's live objects and the pools' file descriptors held, against their ceilings.
     objects: usize,
     fds: usize,
@@ -307,7 +307,7 @@ impl Relay {
             toplevel: None,
             serial: 0,
             presentation: Presentation::default(),
-            last_msc: None,
+            last_presented: None,
             objects: 0,
             fds: 0,
             fds_taken: 0,

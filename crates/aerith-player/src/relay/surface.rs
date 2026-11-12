@@ -1159,18 +1159,47 @@ impl Buffer {
     }
 }
 
+/// When and how the compositor presented a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Presented {
+    /// The refresh counter; 0 when the compositor keeps none, as KWin 6.8.
+    pub(super) msc: u64,
+    /// When it showed, in nanoseconds on the compositor's presentation clock.
+    pub(super) at_ns: u128,
+    /// The display's refresh period then; 0 when it is variable or unknown.
+    pub(super) refresh_ns: u32,
+}
+
+impl Presented {
+    /// The refreshes from `last` to this frame: by the refresh counters when the compositor keeps
+    /// one, else by the time between them over the refresh period, rounded. `None` when neither
+    /// says, or when the counter or the time went back (an output changed).
+    fn refreshes_since(&self, last: &Presented) -> Option<u64> {
+        if self.msc != 0 && last.msc != 0 {
+            return self.msc.checked_sub(last.msc).filter(|gap| *gap > 0);
+        }
+        if self.refresh_ns == 0 || self.at_ns <= last.at_ns {
+            return None;
+        }
+        let refresh = u128::from(self.refresh_ns);
+        let gap = (self.at_ns - last.at_ns + refresh / 2) / refresh;
+        u64::try_from(gap).ok().filter(|gap| *gap > 0)
+    }
+}
+
 impl State {
-    /// Counts a frame the compositor presented at refresh `msc`.
-    pub(super) fn count_presented(&mut self, msc: u64, zero_copy: bool) {
+    /// Counts a frame the compositor presented.
+    pub(super) fn count_presented(&mut self, presented: Presented, zero_copy: bool) {
         let counts = &mut self.presentation;
         counts.presented += 1;
         if zero_copy {
             counts.zero_copy += 1;
         }
-        if let Some(last) = self.last_msc
-            && msc > last
+        if let Some(gap) = self
+            .last_presented
+            .and_then(|last| presented.refreshes_since(&last))
         {
-            match usize::try_from(msc - last)
+            match usize::try_from(gap)
                 .ok()
                 .and_then(|gap| counts.gaps.get_mut(gap))
             {
@@ -1178,7 +1207,7 @@ impl State {
                 None => counts.longer_gaps += 1,
             }
         }
-        self.last_msc = Some(msc);
+        self.last_presented = Some(presented);
     }
 }
 
