@@ -197,8 +197,18 @@ Aerith's window under a test interface, measured against the rivals. Planned by
     - the relay offers mpv `wp_fifo_v1` when the compositor has it, as mpv alone gets it: under
       KWin 6.8 in `agent-headless` (`kwin_wayland --virtual`), mpv inside the testbed waits on
       the plane's fifo. That run found mpv told its output before its scale, now fixed.
-  - Left: 60 Hz and VRR, which the owner sets; the frames and the order
-    below's toggles at 240 Hz; the floor's 30 minutes, the owner's call. Then the two decisions.
+  - Stopped on 2026-11-12 by the owner's choice. Left, in order, each on the owner's screen and go:
+    1. at 240 Hz: display sync on 59.94 fps, the frames compared, the order below's toggles;
+    2. 60 Hz, then VRR, which the owner sets: `scripts/bench-window.sh` at each;
+    3. whether fifo mends the cadence: under a Plasma session, KWin 6.8 offering `wp_fifo_v1`,
+       if the owner wants it; Umbriel has none, and wlroots 0.20 provides none;
+    4. the floor's 30 minutes, the owner's call;
+    5. the decisions, each an ADR: the order of the surfaces, with a uwui session; the rule of
+       display sync;
+    6. the closing review.
+  - Still to put to the owner from M1.4a: ADR-0018's validation, `rustix` as a direct
+    dependency of the player, a short fuzzing pass in CI, and the window thread's wake-ups during
+    playback against `wl-proxy`.
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
@@ -279,6 +289,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - At 240 Hz on Umbriel, under audio sync, 3 % to 23 % of refresh gaps are off the ideal pattern,
   in mpv alone as in Aerith: Umbriel offers no `wp_fifo_v1`, and mpv paces itself. It fails the
   cadence floor, which mpv's own counters do not show.
+- The bench reads mpv alone's presentation from mpv's own feedback, which mpv asks for most
+  frames but not all: its gaps are measured between frames that both have it. The relay's count,
+  for Aerith, has every frame.
 - Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
   bits, and mpv alone does not: their frames differ by one step of 8 bits.
 - The window's thread wakes about 50 times a second while a film plays, for events addressed to

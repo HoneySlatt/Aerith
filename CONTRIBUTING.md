@@ -166,7 +166,10 @@ agent-headless --sway -- sh -c "swaymsg output HEADLESS-1 resolution 1280x720 &&
 ```
 
 `--order above` plays the other order; `--pause-after 2 --seconds 8` shows the window's thread and
-the relay's asleep while paused. The headless output is 3840 × 2160, drawn by pixman: it shows a
+the relay's asleep while paused. KWin's virtual backend is a second compositor that runs there,
+with `wp_fifo_v1` and colour management, which the headless sway lacks: start
+`kwin_wayland --virtual --width 1280 --height 720 --socket kw-test` from KWin's store path (the
+one in `/run/wrappers` carries capabilities), then the testbed with `WAYLAND_DISPLAY=kw-test`. The headless output is 3840 × 2160, drawn by pixman: it shows a
 few frames a second unless made smaller, as above. Figures there are not tier figures.
 
 **On a desktop**, inside `nix develop`, with the pinned mpv and a clip of the corpus:
