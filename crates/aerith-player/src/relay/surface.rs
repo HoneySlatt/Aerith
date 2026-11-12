@@ -18,6 +18,12 @@
 //! then, mpv's frames wait for the interface's commits too, which an interface that is moving the
 //! plane makes at every frame.
 //!
+//! **Opaque.** mpv's buffers carry an alpha channel: libplacebo asks the Vulkan driver for
+//! premultiplied alpha, which Mesa offers on Wayland, so Mesa picks formats with alpha
+//! (`ARGB2101010` and the like). mpv says its picture is opaque through its surface's opaque region
+//! instead. The relay passes it on: without it, the compositor must draw whatever lies under the
+//! plane, and can never show mpv's buffer straight on the screen.
+//!
 //! **Buffers.** A buffer of mpv's is released to mpv when no surface of mpv's holds it any more
 //! and the compositor has released it too. The buffer on screen when the plane is hidden is kept
 //! that way, and shown again when the plane is shown, without mpv drawing again.
@@ -57,6 +63,10 @@ pub(super) struct Surface {
     source: Option<Source>,
     destination: Option<(i32, i32)>,
     content_type: u32,
+    /// The opaque region mpv last committed, `None` for none.
+    opaque_region: Option<Region>,
+    /// Whether that region covers the whole surface, as last committed.
+    opaque: bool,
     /// What mpv committed and the window's connection has not received yet.
     callbacks: Vec<WlCallback>,
     feedbacks: Vec<WpPresentationFeedback>,
@@ -84,6 +94,7 @@ struct Pending {
     source: Option<Option<Source>>,
     destination: Option<Option<(i32, i32)>>,
     content_type: Option<u32>,
+    opaque_region: Option<Option<Region>>,
 }
 
 impl Surface {
@@ -98,6 +109,8 @@ impl Surface {
             source: None,
             destination: None,
             content_type: 0,
+            opaque_region: None,
+            opaque: false,
             callbacks: Vec::new(),
             feedbacks: Vec::new(),
             attach_owed: false,
@@ -131,6 +144,67 @@ impl Surface {
     }
 }
 
+/// What the relay keeps of one of mpv's regions: enough to tell whether it covers a whole surface.
+/// mpv makes its opaque region of one rectangle, its whole surface. A region made otherwise is
+/// `Other` and counts as covering nothing: the plane then says nothing is opaque, which costs the
+/// compositor some drawing and never shows a wrong picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Region {
+    Empty,
+    Rectangle {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    },
+    Other,
+}
+
+impl Region {
+    /// The region with a rectangle added. An empty rectangle adds nothing.
+    pub(super) fn add(self, x: i32, y: i32, width: i32, height: i32) -> Self {
+        if width <= 0 || height <= 0 {
+            return self;
+        }
+        match self {
+            Region::Empty => Region::Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+            Region::Rectangle { .. } | Region::Other => Region::Other,
+        }
+    }
+
+    /// The region with a rectangle of `width` by `height` taken away, wherever it lies.
+    pub(super) fn subtract(self, width: i32, height: i32) -> Self {
+        if self == Region::Empty || width <= 0 || height <= 0 {
+            return self;
+        }
+        Region::Other
+    }
+
+    /// Whether the region holds the whole of a surface of `size`.
+    pub(super) fn covers(self, (surface_width, surface_height): (i32, i32)) -> bool {
+        let Region::Rectangle {
+            x,
+            y,
+            width,
+            height,
+        } = self
+        else {
+            return false;
+        };
+        surface_width > 0
+            && surface_height > 0
+            && x <= 0
+            && y <= 0
+            && i64::from(x) + i64::from(width) >= i64::from(surface_width)
+            && i64::from(y) + i64::from(height) >= i64::from(surface_height)
+    }
+}
+
 /// The plane: where it is, whether it shows, and what the plane's surface holds now.
 pub(super) struct PlaneState {
     /// Once closed, nothing more is issued.
@@ -160,6 +234,8 @@ struct Issued {
     source: Option<Source>,
     destination: Option<(i32, i32)>,
     content_type: u32,
+    /// Whether the plane's whole surface is said to be opaque.
+    opaque: bool,
 }
 
 impl Default for PlaneState {
@@ -180,6 +256,7 @@ impl Default for PlaneState {
                 source: None,
                 destination: None,
                 content_type: 0,
+                opaque: false,
             },
             change: 0,
         }
@@ -250,10 +327,23 @@ impl Dispatch<WlSurface, ()> for State {
                     format!("wl_surface.set_buffer_transform: unknown transform {value}"),
                 ),
             },
+            wl_surface::Request::SetOpaqueRegion { region } => {
+                // The region is read now: mpv may change or destroy it before its commit.
+                let region = region.map(|region| {
+                    state
+                        .regions
+                        .get(&region.id())
+                        .copied()
+                        .unwrap_or(Region::Other)
+                });
+                if let Some(surface) = state.surfaces.get_mut(&id) {
+                    surface.pending.opaque_region = Some(region);
+                }
+            }
             wl_surface::Request::Commit => state.commit(&id),
             // Damage is not passed on: a new buffer is damaged whole on the plane's surface.
-            // Regions stay the relay's: the plane's input region is empty, and its opaque region
-            // follows from its buffer's format. The offset of version 5 is the interface's to set.
+            // The plane's input region is the relay's, always empty. The offset of version 5 is
+            // the interface's to set.
             _ => {}
         }
     }
@@ -359,6 +449,12 @@ impl State {
         if let Some(content_type) = pending.content_type {
             surface.content_type = content_type;
         }
+        if let Some(region) = pending.opaque_region {
+            surface.opaque_region = region;
+        }
+        surface.opaque = surface
+            .opaque_region
+            .is_some_and(|region| region.covers(checked.surface_size()));
         surface.callbacks.extend(pending.callbacks);
         // Feedback of a state that was never shown, replaced by this one, is discarded, as a
         // compositor discards it.
@@ -499,8 +595,10 @@ impl State {
     }
 
     /// Issues what of mpv's surface `id` differs from what the plane's surface holds: its scale,
-    /// transform, viewport and content type. The viewport's destination is the plane's size once
-    /// placed, else mpv's own.
+    /// transform, viewport, content type and whether it is opaque. The viewport's destination is
+    /// the plane's size once placed, else mpv's own. An opaque plane's region is the largest
+    /// rectangle: the compositor keeps the part within the surface, whatever size the plane takes
+    /// later.
     fn issue_surface_state(&mut self, id: &ObjectId) {
         let Some(surface) = self.surfaces.get(id) else {
             return;
@@ -541,6 +639,18 @@ impl State {
                 content_type.set_content_type(value);
             }
             issued.content_type = surface.content_type;
+        }
+        if surface.opaque != issued.opaque {
+            let region = surface.opaque.then(|| {
+                let region = host.globals.compositor.create_region(&self.qh, ());
+                region.add(0, 0, i32::MAX, i32::MAX);
+                region
+            });
+            host.surface.set_opaque_region(region.as_ref());
+            if let Some(region) = region {
+                region.destroy();
+            }
+            issued.opaque = surface.opaque;
         }
     }
 

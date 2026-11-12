@@ -114,6 +114,27 @@ pub(super) struct CommitState {
     pub(super) destination: Option<(i32, i32)>,
 }
 
+impl CommitState {
+    /// The surface's size in its own coordinates, as the compositor computes it: the viewport's
+    /// destination, else its source's size, else the buffer's size divided by its scale and turned
+    /// by its transform. `(0, 0)` for no buffer.
+    pub(super) fn surface_size(&self) -> (i32, i32) {
+        if let Some(destination) = self.destination {
+            return destination;
+        }
+        if let Some(source) = self.source {
+            // Whole when no destination is set: `commit` refuses it otherwise.
+            return (source.width as i32, source.height as i32);
+        }
+        let (width, height) = (self.buffer.0 / self.scale, self.buffer.1 / self.scale);
+        if self.transposed {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
+}
+
 /// The checks wlroots makes at a commit (types/wlr_compositor.c, `surface_finalize_pending`, and
 /// types/wlr_viewporter.c, `viewport_handle_surface_client_commit`): the buffer's size is a
 /// multiple of its scale when no source is set; the source's size is whole when no destination is

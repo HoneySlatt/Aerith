@@ -115,6 +115,8 @@ pub struct SurfaceRecord {
     pub subsurface: Option<SubsurfaceRecord>,
     /// The input region committed: `None` is the default, the whole surface.
     pub input_region: Option<Vec<[i32; 4]>>,
+    /// The opaque region committed: `None` is the default, nothing opaque.
+    pub opaque_region: Option<Vec<[i32; 4]>>,
     /// The buffer committed.
     pub buffer: Option<ObjectId>,
     /// The size of the buffer last committed, `(0, 0)` for none, kept when it is destroyed, as
@@ -148,6 +150,7 @@ struct Pending {
     source: Option<Option<[f64; 4]>>,
     destination: Option<Option<(i32, i32)>>,
     input_region: Option<Option<Vec<[i32; 4]>>>,
+    opaque_region: Option<Option<Vec<[i32; 4]>>>,
 }
 
 /// A surface's subsurface role.
@@ -636,6 +639,7 @@ impl Dispatch<WlCompositor, ()> for HostState {
                     id: resource.id(),
                     subsurface: None,
                     input_region: None,
+                    opaque_region: None,
                     buffer: None,
                     buffer_size: (0, 0),
                     scale: 1,
@@ -753,6 +757,18 @@ impl Dispatch<WlSurface, ()> for HostState {
                     surface.pending.input_region = Some(rects);
                 }
             }
+            wl_surface::Request::SetOpaqueRegion { region } => {
+                let rects = region.map(|region| {
+                    recorded
+                        .regions
+                        .get(&region.id())
+                        .cloned()
+                        .unwrap_or_default()
+                });
+                if let Some(surface) = recorded.surface_mut(&id) {
+                    surface.pending.opaque_region = Some(rects);
+                }
+            }
             wl_surface::Request::Commit => commit(recorded, resource),
             wl_surface::Request::Destroy => {
                 if let Some(surface) = recorded.surface_mut(&id) {
@@ -823,6 +839,9 @@ fn commit(recorded: &mut Recorded, resource: &WlSurface) {
     }
     if let Some(region) = pending.input_region {
         surface.input_region = region;
+    }
+    if let Some(region) = pending.opaque_region {
+        surface.opaque_region = region;
     }
     surface.callbacks.extend(pending.callbacks);
     surface.feedbacks.extend(pending.feedbacks);

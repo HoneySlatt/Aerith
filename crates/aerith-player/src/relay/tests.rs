@@ -1001,6 +1001,138 @@ fn mpvs_content_type_reaches_the_plane_at_its_commit() {
     });
 }
 
+/// mpv's surface with an opaque region made of `rectangles` and then one taken away from it, each
+/// `[x, y, width, height]`, committed with a buffer of 64 by 48: what the plane's surface is told
+/// is opaque.
+fn plane_opaque_region(
+    rectangles: &[[i32; 4]],
+    subtracted: Option<[i32; 4]>,
+) -> Option<Vec<[i32; 4]>> {
+    let (host, interface, _plane, mut mpv, _failures, surface) = shown();
+    let compositor: WlCompositor = mpv.bind(6);
+    let region = compositor.create_region(&mpv.qh, ());
+    for &[x, y, width, height] in rectangles {
+        region.add(x, y, width, height);
+    }
+    if let Some([x, y, width, height]) = subtracted {
+        region.subtract(x, y, width, height);
+    }
+    surface.set_opaque_region(Some(&region));
+    // Read when set: what mpv does to the region afterwards changes nothing.
+    region.subtract(0, 0, 1, 1);
+    region.destroy();
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    host.wait("mpv's frame on the plane", |recorded| {
+        (interface.plane(recorded)?.buffer_commits >= 1).then_some(())
+    });
+    host.with(|recorded| interface.plane(recorded).unwrap().opaque_region.clone())
+}
+
+#[test]
+fn mpvs_opaque_region_over_its_whole_surface_makes_the_plane_opaque() {
+    let opaque = Some(vec![[0, 0, i32::MAX, i32::MAX]]);
+    assert_eq!(plane_opaque_region(&[[0, 0, 64, 48]], None), opaque);
+    assert_eq!(
+        plane_opaque_region(&[[-5, -5, 100, 100]], None),
+        opaque,
+        "a rectangle past the surface covers it too"
+    );
+    assert_eq!(
+        plane_opaque_region(&[[0, 0, 64, 48]], Some([0, 0, 0, 0])),
+        opaque,
+        "an empty rectangle taken away changes nothing"
+    );
+}
+
+#[test]
+fn an_opaque_region_short_of_mpvs_whole_surface_leaves_the_plane_without_one() {
+    assert_eq!(plane_opaque_region(&[[0, 0, 63, 48]], None), None);
+    assert_eq!(plane_opaque_region(&[[1, 0, 64, 48]], None), None);
+    assert_eq!(
+        plane_opaque_region(&[[0, 0, 32, 48], [32, 0, 32, 48]], None),
+        None,
+        "two rectangles count as covering nothing, though they cover the surface"
+    );
+    assert_eq!(
+        plane_opaque_region(&[[0, 0, 64, 48]], Some([0, 0, 1, 1])),
+        None
+    );
+    assert_eq!(plane_opaque_region(&[], None), None);
+}
+
+#[test]
+fn the_plane_stops_being_opaque_at_the_commit_after_mpv_unsets_its_region() {
+    let (host, mut interface, _plane, mut mpv, _failures, surface) = shown();
+    let compositor: WlCompositor = mpv.bind(6);
+    let region = compositor.create_region(&mpv.qh, ());
+    region.add(0, 0, 64, 48);
+    surface.set_opaque_region(Some(&region));
+    region.destroy();
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    host.with(|recorded| {
+        assert_eq!(
+            interface.plane(recorded).unwrap().opaque_region,
+            None,
+            "not before the commit"
+        );
+    });
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    host.wait("the opaque region", |recorded| {
+        interface
+            .plane(recorded)?
+            .opaque_region
+            .as_ref()
+            .map(|_| ())
+    });
+    surface.set_opaque_region(None);
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    host.with(|recorded| {
+        assert!(interface.plane(recorded).unwrap().opaque_region.is_some());
+    });
+    let next = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &next);
+    host.wait("no opaque region", |recorded| {
+        interface
+            .plane(recorded)?
+            .opaque_region
+            .is_none()
+            .then_some(())
+    });
+}
+
+#[test]
+fn a_larger_buffer_without_a_new_region_leaves_the_plane_without_one() {
+    let (host, interface, _plane, mut mpv, _failures, surface) = shown();
+    let compositor: WlCompositor = mpv.bind(6);
+    let region = compositor.create_region(&mpv.qh, ());
+    region.add(0, 0, 64, 48);
+    surface.set_opaque_region(Some(&region));
+    region.destroy();
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    host.wait("the opaque region", |recorded| {
+        interface
+            .plane(recorded)?
+            .opaque_region
+            .as_ref()
+            .map(|_| ())
+    });
+    // The region is mpv's surface's: a larger surface is no longer covered by it.
+    let larger = mpv.shm_buffer(128, 96);
+    mpv.draw(&surface, &larger);
+    host.wait("no opaque region", |recorded| {
+        interface
+            .plane(recorded)?
+            .opaque_region
+            .is_none()
+            .then_some(())
+    });
+}
+
 #[test]
 fn mpvs_surface_is_told_the_planes_scale() {
     let (host, mut interface, _plane, mut mpv, _failures, surface) = shown();

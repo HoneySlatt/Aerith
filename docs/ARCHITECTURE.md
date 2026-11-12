@@ -86,7 +86,10 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   ends mpv and sends `EngineFailed`.
 - At mpv's commit, the relay issues mpv's whole new state on the plane's surface, checked first as
   the compositor will check it, against the size of the buffer the compositor holds, which may be
-  one mpv has destroyed since. The surface runs desynchronized, so mpv's frames show without the
+  one mpv has destroyed since. mpv's buffers carry alpha, and mpv says its picture is opaque
+  through its opaque region: when that region covers mpv's whole surface, the plane's whole
+  surface is said to be opaque, so that the compositor need not draw what lies under it, and can
+  scan the video out. The surface runs desynchronized, so mpv's frames show without the
   interface drawing. A place, show or hide of the interface's that changes the plane's own state
   while it shows switches it to synchronized, so that the change appears with the interface's
   next commit; once the compositor drew it, the surface runs desynchronized again.

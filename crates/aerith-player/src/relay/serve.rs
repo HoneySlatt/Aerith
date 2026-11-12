@@ -45,7 +45,7 @@ use wayland_server::{
 
 use super::check::{self, ParamsErrors};
 use super::host::OutputInfo;
-use super::surface::{Surface, new_feedback};
+use super::surface::{Region, Surface, new_feedback};
 use super::{Buffer, Made, Params, ParamsUse, Pool, State};
 
 /// The versions mpv is offered at most: what the relay implements.
@@ -242,7 +242,8 @@ impl Dispatch<WlCompositor, ()> for State {
                 if !state.admit_object(client) {
                     return;
                 }
-                data_init.init(id, ());
+                let region = data_init.init(id, ());
+                state.regions.insert(region.id(), Region::Empty);
             }
             _ => {}
         }
@@ -251,21 +252,38 @@ impl Dispatch<WlCompositor, ()> for State {
     counted_destruction!(WlCompositor);
 }
 
-/// mpv's regions stay in the relay: the plane's input region is empty, and its opaque region
-/// follows from its buffer's format.
+/// mpv's regions are kept as far as the relay needs them: the plane's input region is always
+/// empty, and its opaque region is the plane's whole surface when mpv's covers mpv's whole surface
+/// ([`Region`]). Nothing of them is issued as mpv sent it.
 impl Dispatch<WlRegion, ()> for State {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &Client,
-        _: &WlRegion,
-        _: wl_region::Request,
+        resource: &WlRegion,
+        request: wl_region::Request,
         _: &(),
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+        let Some(region) = state.regions.get_mut(&resource.id()) else {
+            return;
+        };
+        *region = match request {
+            wl_region::Request::Add {
+                x,
+                y,
+                width,
+                height,
+            } => region.add(x, y, width, height),
+            wl_region::Request::Subtract { width, height, .. } => region.subtract(width, height),
+            _ => *region,
+        };
     }
 
-    counted_destruction!(WlRegion);
+    fn destroyed(state: &mut Self, _: ClientId, resource: &WlRegion, _: &()) {
+        state.object_gone();
+        state.regions.remove(&resource.id());
+    }
 }
 
 impl GlobalDispatch<WlShm, ()> for State {

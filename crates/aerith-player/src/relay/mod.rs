@@ -82,7 +82,7 @@ use wayland_server::{Display, DisplayHandle};
 use crate::plane::{Presentation, Window};
 use host::{FeedbackCache, HostGlobals};
 use socket::{MpvSocket, Read};
-use surface::{PlaneState, Surface};
+use surface::{PlaneState, Region, Surface};
 
 /// The side facing mpv is wayland-server's backend in pure Rust, never libwayland-server
 /// ([ADR-0015]): this compiles only while the two are the same type, that is while
@@ -130,6 +130,7 @@ pub(super) struct State {
     buffers: HashMap<ObjectId, Buffer>,
     pools: HashMap<ObjectId, Pool>,
     params: HashMap<ObjectId, Params>,
+    regions: HashMap<ObjectId, Region>,
     /// The mpv buffer each buffer made on the window's connection stands for.
     host_buffers: HashMap<HostId, ObjectId>,
     /// What each dmabuf parameters object made on the window's connection was asked to make.
@@ -293,6 +294,7 @@ impl Relay {
             buffers: HashMap::new(),
             pools: HashMap::new(),
             params: HashMap::new(),
+            regions: HashMap::new(),
             host_buffers: HashMap::new(),
             host_params: HashMap::new(),
             outputs: Vec::new(),
