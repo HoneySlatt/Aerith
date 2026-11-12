@@ -187,9 +187,16 @@ Aerith's window under a test interface, measured against the rivals. Planned by
       mpv alone keeps cadence no better than Aerith, about a third of gaps off the ideal; Aerith's
       frames differ from mpv alone's by
       one step of 8-bit dithering, as mpv dithers to 8 bits without colour management.
-  - Next, each on the owner's screen and go: `scripts/bench-window.sh` at 240 Hz, then at 60 Hz
-    and with VRR, which the owner sets; the floor's 30 minutes is the owner's call. Then the two
-    decisions.
+    - the series at 240 Hz ([figures](measurements.md#the-series-at-240-hz)), stopped by the
+      owner before 59.94 fps under display sync, the frames and the order below's toggles:
+      - under audio sync, no player meets the cadence floor: 3 % to 23 % of gaps off, mpv alone
+        as Aerith. Umbriel offers no `wp_fifo_v1`, so mpv paces itself in MAILBOX;
+      - under display sync, mpv presents at every refresh: a handful of corrections a minute,
+        but 5 to 9 W more and the relay waking about 1,000 times a second;
+      - the order above scans the video out and, under display sync, costs 2 to 4 W less.
+  - Left: the relay offering `wp_fifo_v1` when the compositor does, which mpv alone uses and
+    Aerith's mpv cannot yet; 60 Hz and VRR, which the owner sets; the frames and the order
+    below's toggles at 240 Hz; the floor's 30 minutes, the owner's call. Then the two decisions.
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
@@ -267,10 +274,11 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
   libwayland-client at run time, the player's included: the development shell sets
   `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
-- At 240 Hz on Umbriel, many refresh gaps of a 23.976 fps film are off the ideal pattern, in mpv
-  alone as in Aerith: about 11 % at M1.4a, a third beside another session's load. mpv paces
-  itself without fifo-v1. It fails the cadence floor, which mpv's own counters do not show;
-  display sync and a quiet machine are measured next.
+- At 240 Hz on Umbriel, under audio sync, 3 % to 23 % of refresh gaps are off the ideal pattern,
+  in mpv alone as in Aerith: Umbriel offers no `wp_fifo_v1`, and mpv paces itself. It fails the
+  cadence floor, which mpv's own counters do not show.
+- The relay offers mpv no `wp_fifo_v1`: on a compositor that has it, mpv alone presents in FIFO
+  and Aerith's mpv cannot.
 - Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
   bits, and mpv alone does not: their frames differ by one step of 8 bits.
 - The window's thread wakes about 50 times a second while a film plays, for events addressed to

@@ -449,3 +449,84 @@ and CPU are not figures. The cadence and the scanout are.
   absent from mpv alone's). The relay offers no colour management until M1.5.
 - In `agent-headless`, where neither mpv sees colour management, the frames are the same (PSNR
   infinite).
+
+### The series at 240 Hz
+
+Measured on 2026-11-12 from 02:43 to 03:33 CET on the owner's desktop, through `owner-desktop`, by
+`BENCH_SECONDS=60 scripts/bench-window.sh` (`4a65058`). Setup as in the first pass, the machine
+quiet but for the first two Aerith runs: 60 s a run, the first 2 s left out, the GPU's idle power
+read 10 s before each. The owner stopped the series twice; the frames were not captured again,
+and the toggles were measured in the order above only. The results stay in
+`target/bench/window-20261112T014314Z` and `window-20261112T022419Z`, not in the repository.
+
+**Cadence under mpv's default audio sync.** "mpv's feedback" counts gaps between frames that both
+had feedback; "the relay" counts every frame of Aerith's. The ideal gap is the display's rate over
+the clip's.
+
+| Clip | Player | Gaps off cadence, mpv's feedback | The relay | Scanned out | GPU power over idle | CPU, one core | Peak PSS | Other programs, threads |
+|---|---|---|---|---|---|---|---|---|
+| cadence-23.976 | mpv | 260 of 1372 | – | 0 of 1380 | 1.72 W | 3.7 % | 181.5 MiB | 1.85 |
+| cadence-23.976 | aerith, below | 338 of 1334 | 380 of 1439 | 0 of 1362 | 2.91 W | 4.0 % | 187.6 MiB | 3.3 |
+| cadence-23.976 | aerith, above | 388 of 1308 | 449 of 1439 | 1349 of 1349 | 2.98 W | 6.1 % | 188.5 MiB | 13.21 |
+| cadence-24 | mpv | 257 of 1381 | – | 0 of 1385 | 3.18 W | 3.1 % | 178.9 MiB | 0.47 |
+| cadence-24 | aerith, below | 335 of 1381 | 346 of 1440 | 0 of 1386 | 2.1 W | 3.2 % | 185.1 MiB | 0.43 |
+| cadence-24 | aerith, above | 274 of 1380 | 284 of 1439 | 301 of 1385 | 2.29 W | 3.3 % | 185.3 MiB | 0.45 |
+| cadence-25 | mpv | 49 of 1429 | – | 0 of 1438 | 2.73 W | 3.2 % | 180.8 MiB | 0.44 |
+| cadence-25 | aerith, below | 45 of 1434 | 51 of 1500 | 0 of 1441 | 1.63 W | 3.4 % | 187.3 MiB | 0.4 |
+| cadence-25 | aerith, above | 72 of 1445 | 75 of 1500 | 1441 of 1447 | 0.75 W | 3.4 % | 187.2 MiB | 0.49 |
+| cadence-29.97 | mpv | 239 of 1728 | – | 0 of 1732 | 4.48 W | 3.6 % | 182.2 MiB | 0.52 |
+| cadence-29.97 | aerith, below | 296 of 1722 | 319 of 1799 | 0 of 1730 | 2.77 W | 3.8 % | 188.1 MiB | 0.54 |
+| cadence-29.97 | aerith, above | 282 of 1732 | 286 of 1798 | 1728 of 1735 | 2.09 W | 3.8 % | 188.2 MiB | 0.43 |
+| cadence-50 | mpv | 234 of 2879 | – | 0 of 2888 | 5.07 W | 5.6 % | 182.1 MiB | 0.42 |
+| cadence-50 | aerith, below | 233 of 2822 | 267 of 3000 | 0 of 2860 | 5.3 W | 6.3 % | 188.2 MiB | 1.53 |
+| cadence-50 | aerith, above | 218 of 2871 | 234 of 3000 | 2874 of 2885 | 3.55 W | 7.0 % | 181.7 MiB | 2.03 |
+| cadence-59.94 | mpv | 805 of 3457 | – | 0 of 3466 | 6.02 W | 6.7 % | 177.6 MiB | 0.78 |
+| cadence-59.94 | aerith, below | 687 of 3458 | 741 of 3597 | 0 of 3467 | 5.69 W | 6.7 % | 188.5 MiB | 0.62 |
+| cadence-59.94 | aerith, above | 689 of 3428 | 749 of 3595 | 1984 of 3451 | 6.36 W | 6.6 % | 188.5 MiB | 0.64 |
+| cadence-60 | mpv | 719 of 3459 | – | 0 of 3468 | 5.31 W | 6.4 % | 181.9 MiB | 0.72 |
+| cadence-60 | aerith, below | 754 of 3450 | 780 of 3600 | 0 of 3464 | 6.99 W | 6.7 % | 181.3 MiB | 0.67 |
+| cadence-60 | aerith, above | 807 of 3464 | 871 of 3600 | 3458 of 3471 | 7.56 W | 7.0 % | 176.6 MiB | 0.55 |
+| sdr-2160p | mpv | 277 of 1257 | – | 0 of 1263 | 2.74 W | 3.8 % | 242.5 MiB | 0.66 |
+| sdr-2160p | aerith, below | 232 of 1250 | 253 of 1318 | 0 of 1260 | 2.63 W | 4.0 % | 247.1 MiB | 0.72 |
+| sdr-2160p | aerith, above | 275 of 1262 | 285 of 1319 | 1260 of 1266 | 3.39 W | 3.9 % | 247.9 MiB | 0.78 |
+
+- **No player meets the cadence floor at 240 Hz under audio sync.** mpv alone has 3 % (25 fps) to
+  23 % (59.94 fps) of its gaps off cadence, Aerith about the same in either order. mpv's own
+  counters say 0 dropped and 0 delayed in every run. The gaps off are mostly one refresh short
+  then one long (9 and 11 at film rate).
+- **The cause is the compositor's pacing protocol.** Umbriel offers neither `wp_fifo_v1` nor
+  `wp_commit_timing_v1` (none in its source, `d171ccb`). mpv 0.42 then presents in MAILBOX and
+  times each frame itself (`video/out/vulkan/context_wayland.c`, `use_fifo`). The relay offers no
+  fifo either: on a compositor that has it, mpv alone would use FIFO, and Aerith's mpv not.
+- **The order above scans the video out**, but not always: 301 of 1385 frames at 24 fps and 1984
+  of 3451 at 59.94; why Umbriel composited the others is not known.
+- **GPU power** differs by a watt or two from run to run, in no steady direction between the
+  players. Memory: Aerith's tree is 5 to 7 MiB above mpv alone's.
+- The window's thread woke 52 to 135 times a second while a film played, the relay's 142 to 363:
+  both grow with the clip's rate.
+
+**Display sync**, `video-sync=display-resample`:
+
+| Clip | Player | Presents a second | Delayed / mistimed (mpv) | GPU power over idle | Window thread / relay, wake-ups a second | Sync, max |
+|---|---|---|---|---|---|---|
+| cadence-23.976 | mpv | 246 | 168 / 51 | 11.77 W | – | 38.0 ms |
+| cadence-23.976 | aerith, below | 240 | 43 / 14 | 11.64 W | 578 / 1422 | 13.1 ms |
+| cadence-23.976 | aerith, above | 240 | 3 / 2 | 7.84 W | 279 / 929 | 9.1 ms |
+| cadence-25 | mpv | 240 | 6 / 1 | 11.12 W | – | 12.9 ms |
+| cadence-25 | aerith, below | 240 | 24 / 5 | 11.07 W | 553 / 1394 | 22.1 ms |
+| cadence-25 | aerith, above | 240 | 2 / 1 | 9.5 W | 329 / 991 | 7.8 ms |
+
+- **mpv presents at every refresh** under display sync, the same picture several times: 240 a
+  second against 24 to 60 under audio sync. The refresh gaps then say nothing of the picture's
+  cadence; mpv's own counters do, and show a handful of corrections a minute.
+- **It costs 5 to 9 W more** than audio sync at this rate, and the relay's thread wakes about
+  1,000 times a second. The order above, scanned out, costs 2 to 4 W less than the order below
+  or mpv alone, which the compositor draws.
+- The run on 59.94 fps and the rest were stopped by the owner; 60 Hz and VRR are not measured.
+  The sync's maximum is the engine's own estimate; mpv alone's 38 ms at 23.976 is not explained.
+
+**The controls shown and hidden 60 times**, order above, `cadence-23.976`, 125 s: of the relay's
+2,997 gaps, 459 off cadence (15 %), among them 28 of 5 to 8 refreshes, which runs without the
+controls almost never show. 1,521 frames were scanned out, while the controls hid. The testbed
+drew 1,868 frames, none late. The order below's run stopped after 1.5 s, before the owner's
+pause; it was not taken again.
