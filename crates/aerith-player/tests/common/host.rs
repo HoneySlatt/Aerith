@@ -376,6 +376,27 @@ impl FakeHost {
         }
     }
 
+    /// Tells every surface committed so far that it left every output its client bound.
+    pub fn leave_outputs(&self) {
+        let handle = self.display.clone();
+        self.with(|recorded| {
+            for record in recorded
+                .surfaces
+                .iter()
+                .filter(|surface| surface.commits > 0)
+            {
+                let Ok(surface) = WlSurface::from_id(&handle, record.id.clone()) else {
+                    continue;
+                };
+                for output in &recorded.outputs {
+                    if output.client() == surface.client() {
+                        surface.leave(output);
+                    }
+                }
+            }
+        });
+    }
+
     /// Answers every frame callback committed so far.
     pub fn frame_done(&self) {
         self.with(Recorded::frame_done);

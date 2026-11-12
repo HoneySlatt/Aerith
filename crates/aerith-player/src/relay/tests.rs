@@ -1227,6 +1227,69 @@ fn mpvs_surface_is_told_the_planes_scale() {
 }
 
 #[test]
+fn an_output_left_while_held_is_never_told() {
+    let host = FakeHost::start();
+    host.with(|recorded| recorded.fractional_scale_later = true);
+    let mut interface = host.connect(true);
+    let (plane, mut mpv, _failures) = relay(&interface);
+    plane.place(10, 20, 320, 180).unwrap();
+    plane.show();
+    interface.commit();
+    let _output: WlOutput = mpv.bind(4);
+    let compositor: WlCompositor = mpv.bind(6);
+    let shell: XdgWmBase = mpv.bind(6);
+    let fractional: WpFractionalScaleManagerV1 = mpv.bind(1);
+    let surface = compositor.create_surface(&mpv.qh, ());
+    let xdg_surface = shell.get_xdg_surface(&surface, &mpv.qh, ());
+    let _toplevel = xdg_surface.get_toplevel(&mpv.qh, ());
+    let _scale = fractional.get_fractional_scale(&surface, &mpv.qh, ());
+    surface.commit();
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    // The plane leaves its output while mpv waits for its scale: mpv is told neither.
+    host.leave_outputs();
+    interface.roundtrip().unwrap();
+    host.with(|recorded| {
+        for object in &recorded.fractional_scales {
+            object.preferred_scale(180);
+        }
+    });
+    mpv.wait("its scale", |received| received.preferred_scale.is_some());
+    interface.roundtrip().unwrap();
+    mpv.roundtrip().unwrap();
+    let events = &mpv.received.surface_events;
+    assert!(
+        !events.contains(&"enter") && !events.contains(&"leave"),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn an_opaque_region_over_mpvs_viewport_destination_makes_the_plane_opaque() {
+    // mpv at a fractional scale: a buffer of 64x48 shown at 32x24 through its own viewport, its
+    // region in those 32x24.
+    for (rectangle, opaque) in [([0, 0, 32, 24], true), ([0, 0, 31, 24], false)] {
+        let (host, interface, _plane, mut mpv, _failures, surface) = shown();
+        let compositor: WlCompositor = mpv.bind(6);
+        let viewporter: WpViewporter = mpv.bind(1);
+        let viewport = viewporter.get_viewport(&surface, &mpv.qh, ());
+        viewport.set_destination(32, 24);
+        let region = compositor.create_region(&mpv.qh, ());
+        let [x, y, width, height] = rectangle;
+        region.add(x, y, width, height);
+        surface.set_opaque_region(Some(&region));
+        region.destroy();
+        let buffer = mpv.shm_buffer(64, 48);
+        mpv.draw(&surface, &buffer);
+        host.wait("mpv's frame on the plane", |recorded| {
+            (interface.plane(recorded)?.buffer_commits >= 1).then_some(())
+        });
+        let issued = host.with(|recorded| interface.plane(recorded).unwrap().opaque_region.clone());
+        assert_eq!(issued.is_some(), opaque, "{rectangle:?}");
+    }
+}
+
+#[test]
 fn mpvs_surface_is_told_its_output_once_the_compositor_said_the_scale() {
     let host = FakeHost::start();
     host.with(|recorded| recorded.fractional_scale_later = true);
@@ -1992,6 +2055,7 @@ impl Dispatch<WlSurface, ()> for Received {
                 received.entered += 1;
                 received.surface_events.push("enter");
             }
+            Event::Leave { .. } => received.surface_events.push("leave"),
             Event::PreferredBufferScale { .. } => {
                 received.surface_events.push("preferred_buffer_scale");
             }

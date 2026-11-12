@@ -684,8 +684,9 @@ impl State {
         }
     }
 
-    /// Issues the fifo requests mpv made with its commit on the plane's own fifo, once. The
-    /// compositor ignores them while the plane is synchronized, as the protocol says.
+    /// Issues the fifo requests mpv made with its commit on the plane's own fifo, once. While the
+    /// plane is synchronized, the compositor ignores the wait, as the protocol says; the barrier
+    /// still applies.
     fn issue_fifo(&mut self, id: &ObjectId) {
         let Some(surface) = self.surfaces.get_mut(id) else {
             return;
@@ -873,8 +874,8 @@ impl State {
     }
 
     /// mpv's surface became the plane's: it is told the scales the plane's surface has, and the
-    /// outputs it is on once mpv committed it and was told its fractional scale, as a compositor
-    /// tells a surface its outputs once it holds content. In that order: mpv 0.42 rescales its
+    /// outputs it is on once mpv committed it, with or without a buffer, and was told its
+    /// fractional scale. In that order: mpv 0.42 rescales its
     /// window by its old scale over the new when its surface enters an output, and told the
     /// output first, divides by a scale of zero and asks for a viewport of 0x0. mpv makes its
     /// toplevel before its fractional scale object, and the compositor may send the plane's scale
