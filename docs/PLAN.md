@@ -40,6 +40,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done |
 | [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | Done |
 | [M1.4b](#m14b--inside-the-window-measured) | The floors hold inside the window; the plane's order and display sync decided | In progress |
+| [M1.4c](#m14c--display-sync-by-the-displays-rate) | The cadence floor holds inside the window, display sync chosen by the display's rate | Planned |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
 
@@ -171,10 +172,11 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   - Display sync, mpv's default audio sync against `display-resample`, at 240 Hz and with VRR, on
     23.976, 25 and 59.94 fps: presents a second, corrections, power. The owner decides the rule
     with these.
-- **Done when.** The corpus's SDR clips meet the cadence and sync floors at 240 Hz and VRR on the
-  high tier, inside the window; the two decisions are ADRs. 60 Hz moved to M1.5, on the lowest
-  laptop, by the owner's choice of 2026-11-12: the desktop's mode comes from its NixOS
-  configuration, which Umbriel cannot change while it runs.
+- **Done when.** The floors are measured at 240 Hz and VRR on the high tier, inside the window,
+  against mpv alone; the two decisions are ADRs. By the owner's choices of 2026-11-12: 60 Hz moved
+  to M1.5, on the lowest laptop, as the desktop's mode comes from its NixOS configuration, which
+  Umbriel cannot change while it runs; meeting the cadence floor moved to M1.4c, which builds the
+  rule of display sync decided here.
 - **How to test.** The bench, on the owner's display.
 - **Measured.** Cadence, sync, power and memory against mpv alone.
 - **By hand.** The owner watches the clips, and switches the monitor to 60 Hz and to VRR.
@@ -223,14 +225,24 @@ Aerith's window under a test interface, measured against the rivals. Planned by
     under VRR, the relay telling which
     ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). It is not built:
     the cadence floor is not met at a fixed rate until it is.
-  - Left, each on the owner's go:
-    1. where building ADR-0021's rule goes, and whether M1.4b closes before it;
-    2. VRR on a quiet machine, under audio sync, if the owner wants figures without load;
-    3. the floor's 30 minutes, the owner's call;
-    4. the closing review.
+  - Left: the closing review. VRR on a quiet machine and the floor's 30 minutes go to M1.4c.
   - Still to put to the owner from M1.4a: ADR-0018's validation, `rustix` as a direct
     dependency of the player, a short fuzzing pass in CI, and the window thread's wake-ups during
     playback against `wl-proxy`.
+
+### M1.4c — Display sync by the display's rate
+
+- **Goal.** The cadence floor holds inside the window, at a fixed rate and under VRR, by the rule
+  of [ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md).
+- **Delivers.** The relay telling a fixed rate from VRR by the presentation times of mpv's frames;
+  the player switching mpv's `video-sync` when the answer changes, under audio sync until it is
+  known; tests against a fake compositor that presents at whole refreshes and between them.
+- **Done when.** The corpus's SDR clips meet the cadence and sync floors at 240 Hz and under VRR
+  on the high tier, inside the window, on a quiet machine.
+- **How to test.** `cargo test`; `scripts/bench-window.sh` on the owner's display.
+- **Measured.** Cadence, sync, power and wake-ups against mpv alone under each sync; how long the
+  detection takes; the floor's 30 minutes, if the owner wants them.
+- **By hand.** The owner turns VRR on and off.
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
