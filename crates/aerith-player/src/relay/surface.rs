@@ -76,6 +76,11 @@ pub(super) struct Surface {
     pub(super) viewport: Option<WpViewport>,
     pub(super) has_fractional_scale: bool,
     pub(super) has_content_type: bool,
+    pub(super) has_fifo: bool,
+    /// What mpv's fifo asked with the last commit, until it is issued on the plane: a barrier
+    /// set, and a wait for the barrier before.
+    fifo_barrier: bool,
+    fifo_wait: bool,
     /// The shell role mpv gave it: the relay plays `xdg_wm_base`, and its one toplevel is the
     /// plane's.
     pub(super) xdg_surface: Option<XdgSurface>,
@@ -95,6 +100,8 @@ struct Pending {
     destination: Option<Option<(i32, i32)>>,
     content_type: Option<u32>,
     opaque_region: Option<Option<Region>>,
+    fifo_barrier: bool,
+    fifo_wait: bool,
 }
 
 impl Surface {
@@ -117,6 +124,9 @@ impl Surface {
             viewport: None,
             has_fractional_scale: false,
             has_content_type: false,
+            has_fifo: false,
+            fifo_barrier: false,
+            fifo_wait: false,
             xdg_surface: None,
             toplevel: false,
         }
@@ -141,6 +151,14 @@ impl Surface {
 
     pub(super) fn set_content_type(&mut self, content_type: u32) {
         self.pending.content_type = Some(content_type);
+    }
+
+    pub(super) fn set_fifo_barrier(&mut self) {
+        self.pending.fifo_barrier = true;
+    }
+
+    pub(super) fn wait_fifo_barrier(&mut self) {
+        self.pending.fifo_wait = true;
     }
 }
 
@@ -458,6 +476,9 @@ impl State {
         if let Some(region) = pending.opaque_region {
             surface.opaque_region = region;
         }
+        // Fifo requests belong to this commit only.
+        surface.fifo_barrier = pending.fifo_barrier;
+        surface.fifo_wait = pending.fifo_wait;
         surface.opaque = surface
             .opaque_region
             .is_some_and(|region| region.covers(checked.surface_size()));
@@ -550,6 +571,7 @@ impl State {
         self.sync_plane_for(origin, host_buffer.is_some());
         self.attach_owed_buffer(&id, host_buffer, next.buffer);
         self.issue_surface_state(&id);
+        self.issue_fifo(&id);
         self.issue_frame_requests(&id);
         if origin == Origin::Interface && self.plane.sync {
             Self::ask_applied(&mut self.plane, &self.host, &self.qh);
@@ -659,6 +681,27 @@ impl State {
                 region.destroy();
             }
             issued.opaque = surface.opaque;
+        }
+    }
+
+    /// Issues the fifo requests mpv made with its commit on the plane's own fifo, once. The
+    /// compositor ignores them while the plane is synchronized, as the protocol says.
+    fn issue_fifo(&mut self, id: &ObjectId) {
+        let Some(surface) = self.surfaces.get_mut(id) else {
+            return;
+        };
+        let (barrier, wait) = (
+            mem::take(&mut surface.fifo_barrier),
+            mem::take(&mut surface.fifo_wait),
+        );
+        let Some(fifo) = &self.host.fifo else {
+            return;
+        };
+        if barrier {
+            fifo.set_barrier();
+        }
+        if wait {
+            fifo.wait_barrier();
         }
     }
 

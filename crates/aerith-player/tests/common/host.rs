@@ -38,6 +38,8 @@ use wayland_protocols::wp::content_type::v1::server::wp_content_type_manager_v1:
     self, WpContentTypeManagerV1,
 };
 use wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::{self, WpContentTypeV1};
+use wayland_protocols::wp::fifo::v1::server::wp_fifo_manager_v1::{self, WpFifoManagerV1};
+use wayland_protocols::wp::fifo::v1::server::wp_fifo_v1::{self, WpFifoV1};
 use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_manager_v1::{
     self, WpFractionalScaleManagerV1,
 };
@@ -271,6 +273,7 @@ impl FakeHost {
         handle.create_global::<HostState, ZwpLinuxDmabufV1, ()>(4, ());
         handle.create_global::<HostState, WpFractionalScaleManagerV1, ()>(1, ());
         handle.create_global::<HostState, WpContentTypeManagerV1, ()>(1, ());
+        handle.create_global::<HostState, WpFifoManagerV1, ()>(1, ());
         let shared: Shared = Arc::default();
         shared.0.lock().unwrap().answer_at_once = true;
         let (stop, stopped) = UnixStream::pair().unwrap();
@@ -524,7 +527,8 @@ plain_global!(
     WlCompositor,
     ZwpLinuxDmabufV1,
     WpFractionalScaleManagerV1,
-    WpContentTypeManagerV1
+    WpContentTypeManagerV1,
+    WpFifoManagerV1
 );
 
 /// Binds a global whose object has a destructor, and records it in [`Recorded::bound`].
@@ -1411,6 +1415,44 @@ impl Dispatch<WpFractionalScaleV1, ()> for HostState {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+    }
+}
+
+impl Dispatch<WpFifoManagerV1, ()> for HostState {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &WpFifoManagerV1,
+        request: wp_fifo_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_fifo_manager_v1::Request::GetFifo { id, surface } = request {
+            data_init.init(id, surface.id());
+        }
+    }
+}
+
+/// A fifo's requests go to its surface's log, in order with the surface's own.
+impl Dispatch<WpFifoV1, ObjectId> for HostState {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &WpFifoV1,
+        request: wp_fifo_v1::Request,
+        surface: &ObjectId,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let name = match request {
+            wp_fifo_v1::Request::SetBarrier => "set_barrier",
+            wp_fifo_v1::Request::WaitBarrier => "wait_barrier",
+            _ => return,
+        };
+        if let Some(surface) = state.recorded().surface_mut(surface) {
+            surface.log.push(name);
+        }
     }
 }
 

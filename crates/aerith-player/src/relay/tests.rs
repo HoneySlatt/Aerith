@@ -28,6 +28,8 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop};
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_manager_v1::WpContentTypeManagerV1;
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::{self, WpContentTypeV1};
+use wayland_protocols::wp::fifo::v1::client::wp_fifo_manager_v1::WpFifoManagerV1;
+use wayland_protocols::wp::fifo::v1::client::wp_fifo_v1::WpFifoV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
@@ -317,6 +319,7 @@ fn mpv_is_offered_a_list_of_globals_and_nothing_else() {
             "wl_output",
             "wl_shm",
             "wp_content_type_manager_v1",
+            "wp_fifo_manager_v1",
             "wp_fractional_scale_manager_v1",
             "wp_presentation",
             "wp_viewporter",
@@ -1136,6 +1139,65 @@ fn a_larger_buffer_without_a_new_region_leaves_the_plane_without_one() {
 }
 
 #[test]
+fn mpvs_fifo_barriers_reach_the_planes_fifo_with_mpvs_commit() {
+    let (host, interface, _plane, mut mpv, _failures, surface) = shown();
+    let manager: WpFifoManagerV1 = mpv.bind(1);
+    let fifo = manager.get_fifo(&surface, &mpv.qh, ());
+    let buffer = mpv.shm_buffer(64, 48);
+    fifo.wait_barrier();
+    fifo.set_barrier();
+    mpv.draw(&surface, &buffer);
+    host.wait("mpv's frame on the plane", |recorded| {
+        (interface.plane(recorded)?.buffer_commits >= 1).then_some(())
+    });
+    // A frame without fifo requests carries none.
+    let next = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &next);
+    host.wait("mpv's second frame", |recorded| {
+        (interface.plane(recorded)?.buffer_commits >= 2).then_some(())
+    });
+    host.with(|recorded| {
+        let log = &interface.plane(recorded).unwrap().log;
+        let commits: Vec<usize> = (0..log.len()).filter(|&i| log[i] == "commit").collect();
+        let first_frame = log.iter().position(|name| *name == "attach").unwrap();
+        let first_commit = commits.iter().copied().find(|&i| i > first_frame).unwrap();
+        let barriers: Vec<usize> = (0..log.len())
+            .filter(|&i| log[i] == "set_barrier" || log[i] == "wait_barrier")
+            .collect();
+        assert_eq!(barriers.len(), 2, "{log:?}");
+        assert!(
+            barriers
+                .iter()
+                .all(|&i| i > first_frame && i < first_commit),
+            "with the frame's commit: {log:?}"
+        );
+    });
+}
+
+#[test]
+fn a_second_fifo_for_a_surface_ends_mpv_only() {
+    let (host, mut interface, _plane, mut mpv, failures, surface) = shown();
+    let manager: WpFifoManagerV1 = mpv.bind(1);
+    let _first = manager.get_fifo(&surface, &mpv.qh, ());
+    let _second = manager.get_fifo(&surface, &mpv.qh, ());
+    let _ = mpv.roundtrip();
+    ended_mpv_only(&host, &mut interface, &mut mpv, &failures, "a fifo already");
+}
+
+#[test]
+fn a_fifo_request_after_its_surface_is_gone_ends_mpv_only() {
+    let (host, mut interface, _plane, mut mpv, failures, _surface) = shown();
+    let compositor: WlCompositor = mpv.bind(6);
+    let other = compositor.create_surface(&mpv.qh, ());
+    let manager: WpFifoManagerV1 = mpv.bind(1);
+    let fifo = manager.get_fifo(&other, &mpv.qh, ());
+    other.destroy();
+    fifo.set_barrier();
+    let _ = mpv.roundtrip();
+    ended_mpv_only(&host, &mut interface, &mut mpv, &failures, "was destroyed");
+}
+
+#[test]
 fn mpvs_surface_is_told_the_planes_scale() {
     let (host, mut interface, _plane, mut mpv, _failures, surface) = shown();
     let manager: WpFractionalScaleManagerV1 = mpv.bind(1);
@@ -1892,6 +1954,8 @@ delegate_noop!(Received: ignore WpPresentation);
 delegate_noop!(Received: ZwpLinuxDmabufV1);
 delegate_noop!(Received: WpFractionalScaleManagerV1);
 delegate_noop!(Received: WpContentTypeManagerV1);
+delegate_noop!(Received: WpFifoManagerV1);
+delegate_noop!(Received: WpFifoV1);
 delegate_noop!(Received: WpContentTypeV1);
 delegate_noop!(Received: ignore WlSeat);
 

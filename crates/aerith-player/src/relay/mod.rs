@@ -16,8 +16,8 @@
 //!
 //! **What mpv sees.** A list of globals, not a filter: `wl_compositor`, `wl_shm`,
 //! `zwp_linux_dmabuf_v1` (version 4, its feedback forwarded), `wp_viewporter`,
-//! `wp_fractional_scale_manager_v1`, `wp_presentation`, `wp_content_type_manager_v1` when the
-//! compositor offers them, each `wl_output` mirrored, and `xdg_wm_base`, which the relay plays
+//! `wp_fractional_scale_manager_v1`, `wp_presentation`, `wp_content_type_manager_v1` and
+//! `wp_fifo_manager_v1` when the compositor offers them, each `wl_output` mirrored, and `xdg_wm_base`, which the relay plays
 //! itself ([`shell`]). No seat, subcompositor, data device, idle inhibitor, decoration or sync
 //! object: without `wp_linux_drm_syncobj_manager_v1`, Mesa relies on the dma-bufs' implicit
 //! fences.
@@ -69,6 +69,7 @@ use wayland_client::protocol::wl_output::WlOutput as HostOutput;
 use wayland_client::protocol::wl_surface::WlSurface as HostSurface;
 use wayland_client::{Connection, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::WpContentTypeV1 as HostContentType;
+use wayland_protocols::wp::fifo::v1::client::wp_fifo_v1::WpFifoV1 as HostFifo;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::WpFractionalScaleV1 as HostFractionalScale;
 use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_v1::WpFractionalScaleV1 as MpvFractionalScale;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1 as HostParams;
@@ -173,6 +174,8 @@ pub(super) struct Host {
     viewport: HostViewport,
     fractional_scale: Option<HostFractionalScale>,
     content_type: Option<HostContentType>,
+    /// The plane surface's fifo, through which mpv's frames wait for the display's refresh.
+    fifo: Option<HostFifo>,
     /// The compositor's dmabuf feedback, the default one and the plane surface's, as last sent.
     default_feedback: FeedbackCache,
     surface_feedback: FeedbackCache,

@@ -24,6 +24,8 @@ use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, delegate_noop};
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_manager_v1::WpContentTypeManagerV1;
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::WpContentTypeV1;
+use wayland_protocols::wp::fifo::v1::client::wp_fifo_manager_v1::WpFifoManagerV1;
+use wayland_protocols::wp::fifo::v1::client::wp_fifo_v1::WpFifoV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
@@ -62,6 +64,7 @@ pub(super) struct HostGlobals {
     pub(super) clock: Option<u32>,
     pub(super) fractional_scale: Option<WpFractionalScaleManagerV1>,
     pub(super) content_type: Option<WpContentTypeManagerV1>,
+    pub(super) fifo: Option<WpFifoManagerV1>,
 }
 
 /// The highest version of each global the relay speaks.
@@ -112,6 +115,7 @@ impl HostGlobals {
             clock: None,
             fractional_scale: globals.bind(qh, 1..=1, ()).ok(),
             content_type: globals.bind(qh, 1..=1, ()).ok(),
+            fifo: globals.bind(qh, 1..=1, ()).ok(),
         })
     }
 }
@@ -146,6 +150,10 @@ impl Host {
             .content_type
             .as_ref()
             .map(|manager| manager.get_surface_content_type(&surface, qh, ()));
+        let fifo = globals
+            .fifo
+            .as_ref()
+            .map(|manager| manager.get_fifo(&surface, qh, ()));
         let (default_feedback, surface_feedback) = match &globals.dmabuf {
             Some(dmabuf) => (
                 FeedbackCache::new(Some(dmabuf.get_default_feedback(qh, FeedbackKind::Default))),
@@ -166,6 +174,7 @@ impl Host {
             viewport,
             fractional_scale,
             content_type,
+            fifo,
             default_feedback,
             surface_feedback,
             preferred_scale: None,
@@ -189,6 +198,9 @@ impl Host {
         if let Some(content_type) = &self.content_type {
             content_type.destroy();
         }
+        if let Some(fifo) = &self.fifo {
+            fifo.destroy();
+        }
         if let Some(fractional_scale) = &self.fractional_scale {
             fractional_scale.destroy();
         }
@@ -211,6 +223,9 @@ impl Host {
             manager.destroy();
         }
         if let Some(manager) = &globals.content_type {
+            manager.destroy();
+        }
+        if let Some(manager) = &globals.fifo {
             manager.destroy();
         }
         // wl_compositor up to version 6 has no destructor: the compositor frees it with the
@@ -473,6 +488,8 @@ delegate_noop!(State: ZwpLinuxDmabufV1);
 delegate_noop!(State: WpFractionalScaleManagerV1);
 delegate_noop!(State: WpContentTypeManagerV1);
 delegate_noop!(State: WpContentTypeV1);
+delegate_noop!(State: WpFifoManagerV1);
+delegate_noop!(State: WpFifoV1);
 
 impl Dispatch<WlShm, ()> for State {
     fn event(

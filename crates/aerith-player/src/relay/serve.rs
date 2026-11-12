@@ -15,6 +15,8 @@ use wayland_protocols::wp::content_type::v1::server::wp_content_type_manager_v1:
     self, WpContentTypeManagerV1,
 };
 use wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::{self, WpContentTypeV1};
+use wayland_protocols::wp::fifo::v1::server::wp_fifo_manager_v1::{self, WpFifoManagerV1};
+use wayland_protocols::wp::fifo::v1::server::wp_fifo_v1::{self, WpFifoV1};
 use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_manager_v1::{
     self, WpFractionalScaleManagerV1,
 };
@@ -83,6 +85,9 @@ impl State {
         }
         if globals.content_type.is_some() {
             display.create_global::<State, WpContentTypeManagerV1, ()>(1, ());
+        }
+        if globals.fifo.is_some() {
+            display.create_global::<State, WpFifoManagerV1, ()>(1, ());
         }
         display.create_global::<State, XdgWmBase, ()>(XDG_WM_BASE, ());
         let complete: Vec<u32> = self
@@ -939,6 +944,91 @@ impl Dispatch<WpFractionalScaleV1, ObjectId> for State {
             .retain(|(object, _)| object != resource);
         if let Some(surface) = state.surfaces.get_mut(surface) {
             surface.has_fractional_scale = false;
+        }
+    }
+}
+
+impl GlobalDispatch<WpFifoManagerV1, ()> for State {
+    fn bind(
+        state: &mut Self,
+        _: &DisplayHandle,
+        client: &Client,
+        resource: New<WpFifoManagerV1>,
+        _: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        bind(state, client, resource, data_init);
+    }
+}
+
+/// mpv's fifo, one for a surface at most: its barriers go with the surface's next commit, and
+/// reach the plane's own fifo when that commit is issued on the plane ([`Surface`]).
+impl Dispatch<WpFifoManagerV1, ()> for State {
+    fn request(
+        state: &mut Self,
+        client: &Client,
+        resource: &WpFifoManagerV1,
+        request: wp_fifo_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        use wp_fifo_manager_v1::{Error, Request};
+        let Request::GetFifo { id, surface } = request else {
+            return;
+        };
+        let surface_id = surface.id();
+        if state
+            .surfaces
+            .get(&surface_id)
+            .is_some_and(|surface| surface.has_fifo)
+        {
+            resource.post_error(Error::AlreadyExists, "the surface has a fifo already");
+            return;
+        }
+        if !state.admit_object(client) {
+            return;
+        }
+        data_init.init(id, surface_id.clone());
+        if let Some(surface) = state.surfaces.get_mut(&surface_id) {
+            surface.has_fifo = true;
+        }
+    }
+
+    counted_destruction!(WpFifoManagerV1);
+}
+
+impl Dispatch<WpFifoV1, ObjectId> for State {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &WpFifoV1,
+        request: wp_fifo_v1::Request,
+        surface: &ObjectId,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        use wp_fifo_v1::{Error, Request};
+        let barrier = match request {
+            Request::SetBarrier => true,
+            Request::WaitBarrier => false,
+            _ => return,
+        };
+        let Some(surface) = state.surfaces.get_mut(surface) else {
+            resource.post_error(Error::SurfaceDestroyed, "the fifo's surface was destroyed");
+            return;
+        };
+        if barrier {
+            surface.set_fifo_barrier();
+        } else {
+            surface.wait_fifo_barrier();
+        }
+    }
+
+    fn destroyed(state: &mut Self, _: ClientId, _: &WpFifoV1, surface: &ObjectId) {
+        state.object_gone();
+        if let Some(surface) = state.surfaces.get_mut(surface) {
+            surface.has_fifo = false;
         }
     }
 }

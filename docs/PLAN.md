@@ -194,8 +194,10 @@ Aerith's window under a test interface, measured against the rivals. Planned by
       - under display sync, mpv presents at every refresh: a handful of corrections a minute,
         but 5 to 9 W more and the relay waking about 1,000 times a second;
       - the order above scans the video out and, under display sync, costs 2 to 4 W less.
-  - Left: the relay offering `wp_fifo_v1` when the compositor does, which mpv alone uses and
-    Aerith's mpv cannot yet; 60 Hz and VRR, which the owner sets; the frames and the order
+    - the relay offers mpv `wp_fifo_v1` when the compositor has it, as mpv alone gets it: under
+      KWin 6.8 in `agent-headless` (`kwin_wayland --virtual`), mpv inside the testbed waits on
+      the plane's fifo. That run found mpv told its output before its scale, now fixed.
+  - Left: 60 Hz and VRR, which the owner sets; the frames and the order
     below's toggles at 240 Hz; the floor's 30 minutes, the owner's call. Then the two decisions.
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
@@ -277,8 +279,6 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - At 240 Hz on Umbriel, under audio sync, 3 % to 23 % of refresh gaps are off the ideal pattern,
   in mpv alone as in Aerith: Umbriel offers no `wp_fifo_v1`, and mpv paces itself. It fails the
   cadence floor, which mpv's own counters do not show.
-- The relay offers mpv no `wp_fifo_v1`: on a compositor that has it, mpv alone presents in FIFO
-  and Aerith's mpv cannot.
 - Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
   bits, and mpv alone does not: their frames differ by one step of 8 bits.
 - The window's thread wakes about 50 times a second while a film plays, for events addressed to
