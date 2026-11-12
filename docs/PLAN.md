@@ -197,15 +197,18 @@ Aerith's window under a test interface, measured against the rivals. Planned by
     - the relay offers mpv `wp_fifo_v1` when the compositor has it, as mpv alone gets it: under
       KWin 6.8 in `agent-headless` (`kwin_wayland --virtual`), mpv inside the testbed waits on
       the plane's fifo. That run found mpv told its output before its scale, now fixed.
+  - The rest of the 240 Hz series taken on 2026-11-12
+    ([figures](measurements.md#the-series-at-240-hz)): under display sync at 59.94 fps the order
+    above costs least again; toggling the controls adds no hitch in the order below and about 28
+    in the order above; the frames match mpv alone's but for its dithering.
   - Stopped on 2026-11-12 by the owner's choice. Left, in order, each on the owner's screen and go:
-    1. at 240 Hz: display sync on 59.94 fps, the frames compared, the order below's toggles;
-    2. 60 Hz, then VRR, which the owner sets: `scripts/bench-window.sh` at each;
-    3. whether fifo mends the cadence: under a Plasma session, KWin 6.8 offering `wp_fifo_v1`,
+    1. 60 Hz, then VRR, which the owner sets: `scripts/bench-window.sh` at each;
+    2. whether fifo mends the cadence: under a Plasma session, KWin 6.8 offering `wp_fifo_v1`,
        if the owner wants it; Umbriel has none, and wlroots 0.20 provides none;
-    4. the floor's 30 minutes, the owner's call;
-    5. the decisions, each an ADR: the order of the surfaces, with a uwui session; the rule of
+    3. the floor's 30 minutes, the owner's call;
+    4. the decisions, each an ADR: the order of the surfaces, with a uwui session; the rule of
        display sync;
-    6. the closing review.
+    5. the closing review.
   - Still to put to the owner from M1.4a: ADR-0018's validation, `rustix` as a direct
     dependency of the player, a short fuzzing pass in CI, and the window thread's wake-ups during
     playback against `wl-proxy`.

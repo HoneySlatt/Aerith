@@ -455,8 +455,7 @@ and CPU are not figures. The cadence and the scanout are.
 Measured on 2026-11-12 from 02:43 to 03:33 CET on the owner's desktop, through `owner-desktop`, by
 `BENCH_SECONDS=60 scripts/bench-window.sh` (`4a65058`). Setup as in the first pass, the machine
 quiet but for the first two Aerith runs: 60 s a run, the first 2 s left out, the GPU's idle power
-read 10 s before each. The owner stopped the series twice; the frames were not captured again,
-and the toggles were measured in the order above only. The results stay in
+read 10 s before each. The owner stopped the series twice; what was left was taken after, below. The results stay in
 `target/bench/window-20261112T014314Z` and `window-20261112T022419Z`, not in the repository.
 
 **Cadence under mpv's default audio sync.** "mpv's feedback" counts gaps between frames that both
@@ -522,11 +521,31 @@ the clip's.
 - **It costs 5 to 9 W more** than audio sync at this rate, and the relay's thread wakes about
   1,000 times a second. The order above, scanned out, costs 2 to 4 W less than the order below
   or mpv alone, which the compositor draws.
-- The run on 59.94 fps and the rest were stopped by the owner; 60 Hz and VRR are not measured.
-  The sync's maximum is the engine's own estimate; mpv alone's 38 ms at 23.976 is not explained.
+- The run on 59.94 fps was taken later, below. 60 Hz and VRR are not measured. The sync's maximum is the engine's own estimate; mpv alone's 38 ms at 23.976 is not explained.
 
 **The controls shown and hidden 60 times**, order above, `cadence-23.976`, 125 s: of the relay's
 2,997 gaps, 459 off cadence (15 %), among them 28 of 5 to 8 refreshes, which runs without the
 controls almost never show. 1,521 frames were scanned out, while the controls hid. The testbed
 drew 1,868 frames, none late. The order below's run stopped after 1.5 s, before the owner's
-pause; it was not taken again.
+pause, and was taken again below.
+
+**The rest of the 240 Hz series**, on 2026-11-12 from 05:18 to 05:27 CET, the machine quiet
+(`others_cores` 0.3 to 1.5), the same setup:
+
+| Clip | Player | Presents a second | Delayed / mistimed (mpv) | GPU power over idle | Window thread / relay, wake-ups a second | Sync, max |
+|---|---|---|---|---|---|---|
+| cadence-59.94, display sync | mpv | 240 | 31 / 2 | 13.04 W | – | 15.3 ms |
+| cadence-59.94, display sync | aerith, below | 240 | 35 / 6 | 17.42 W | 547 / 1375 | 16.4 ms |
+| cadence-59.94, display sync | aerith, above | 240 | 5 / 0 | 10.83 W | 282 / 926 | 13.4 ms |
+
+- Under display sync, the order above again costs least: 2 W under mpv alone, 6.6 W under the
+  order below, which the compositor draws at every refresh under winit's transparent surface.
+- **The controls shown and hidden 60 times, order below**, `cadence-23.976`, 125 s: of the
+  relay's 2,997 gaps, 959 off cadence, nearly all 9 or 11 refreshes, 3 of 8, none shorter. The
+  toggles add no hitch in this order; in the order above they added about 28 gaps of 5 to 8
+  refreshes. The testbed drew 1,858 frames, none late.
+- **The frames compared again**, `--frames 5,20,40`: at 20 and 40 s, the same PSNR as at the first
+  pass (62.1 to 62.7 dB). At 5 s, 19.0 and 19.3 dB: mpv alone's on-screen controller showed over
+  that frame, as it does after a load, where Aerith's mpv has it off (`--osc=no`). Without the
+  bottom 15 % of the picture, where it lies, 62.2 and 62.9 dB. `scripts/bench-window.sh` now
+  turns it off in the frames' runs.
