@@ -27,8 +27,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   mpv's start: M1.2's figures for it are to be taken again once the bench waits. M1.4 designed on
   2026-11-11 ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md),
   [ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md),
-  [ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) and split in two by the owner: M1.4a
-  under way.
+  [ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) and split in two by the owner. M1.4a
+  done on 2026-11-12 ([ADR-0018](adr/0018-what-building-the-relay-changed.md)). Next: M1.4b, on the
+  owner's go.
 
 ## Status
 
@@ -37,7 +38,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.1](#m11--the-workspace-and-its-checks) | The workspace exists and every check runs in CI | Done |
 | [M1.2](#m12--the-rivals-measured-and-the-corpus) | The rivals are measured and the bar's figures set | In progress |
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done |
-| [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | In progress |
+| [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | Done |
 | [M1.4b](#m14b--inside-the-window-measured) | The floors hold inside the window; the plane's order and display sync decided | Planned |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
@@ -149,13 +150,11 @@ Aerith's window under a test interface, measured against the rivals. Planned by
       `agent-headless` in both orders, asleep while paused.
     - on the owner's display ([figures](measurements.md#inside-the-testbed-on-the-desktop)), on
       Umbriel with real dma-bufs:
-      - 9 of the corpus's 14 SDR clips played in the order below, 3 of them in the order above;
-        the five other `audio-*` clips were not played;
+      - the corpus's 14 SDR clips played in the order below, 3 of them in the order above too;
       - the first frame in about 70 ms with caches kept, against about 80 ms for mpv alone;
       - the window's thread woke about 50 times a second while a film played, the relay's 142.
     - the closing review, its findings fixed or recorded below.
-  - Left, on the owner's go: the five other `audio-*` clips through the testbed on the owner's
-    display, about a minute; then M1.4a is done.
+  - Done on 2026-11-12.
 
 ### M1.4b — Inside the window, measured
 

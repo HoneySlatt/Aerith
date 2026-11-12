@@ -321,6 +321,17 @@ runs (`/tmp/m14-desk`, thrown away).
 Each played to its end with 0 frames discarded. At most one frame committed was not yet presented
 when the run stopped.
 
+**The five other SDR clips**: `audio-dts-5.1`, `audio-dtshd-ma-7.1`, `audio-dtsx-7.1.4`,
+`audio-truehd-5.1` and `audio-truehd-atmos-7.1`, 4 s each in the order below.
+- When: on 2026-11-12. The Steam client ran (no game), and the machine's state differed from the
+  day before.
+- Each played and the testbed exited 0, with 0 frames discarded.
+- The pictures of `audio-dtsx-7.1.4` and `audio-truehd-atmos-7.1` last under a second
+  ([above](#the-corpus)); they ended there.
+- First frames with empty caches: 547 to 715 ms, against about 160 ms for the cadence clips the day
+  before. The refresh gaps were wider too: of a clip's 100 frames, 10 refreshes about half the
+  time, 9 or 11 about 40 %, 8 or 12 a few. These runs are not compared with the others.
+
 **The time to the first frame**, the clip `hdr10-2160p-hevc10-eac3` (mpv tone-maps it to this SDR
 desktop):
 
