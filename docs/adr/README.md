@@ -29,3 +29,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0018](0018-what-building-the-relay-changed.md) | What building the relay changed: the socket read by the relay, no sync objects, mpv kept from the compositor | Accepted; amends 0015 |
 | [0019](0019-the-video-above-a-black-root.md) | The video above a black root, the interface in a surface above it | Accepted |
 | [0020](0020-what-measuring-the-relay-changed.md) | What measuring the relay changed: mpv's opaque region and the compositor's fifo | Accepted; amends 0015 |
+| [0021](0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md) | Display sync at a fixed refresh rate, audio sync under VRR | Accepted |

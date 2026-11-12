@@ -219,10 +219,14 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   - The order of the surfaces decided on 2026-11-12: the video above a black root
     ([ADR-0019](adr/0019-the-video-above-a-black-root.md)), to be confirmed in a uwui session.
     What measuring changed in the relay: [ADR-0020](adr/0020-what-measuring-the-relay-changed.md).
-  - Stopped on 2026-11-12 by the owner's choice. Left, in order, each on the owner's screen and go:
-    1. VRR on a quiet machine, under audio sync, if the owner wants figures without load;
-    2. the floor's 30 minutes, the owner's call;
-    3. the rule of display sync, an ADR: the owner decides it with the 60 Hz and VRR figures;
+  - The rule of display sync decided on 2026-11-12: display sync at a fixed rate, audio sync
+    under VRR, the relay telling which
+    ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). It is not built:
+    the cadence floor is not met at a fixed rate until it is.
+  - Left, each on the owner's go:
+    1. where building ADR-0021's rule goes, and whether M1.4b closes before it;
+    2. VRR on a quiet machine, under audio sync, if the owner wants figures without load;
+    3. the floor's 30 minutes, the owner's call;
     4. the closing review.
   - Still to put to the owner from M1.4a: ADR-0018's validation, `rustix` as a direct
     dependency of the player, a short fuzzing pass in CI, and the window thread's wake-ups during
