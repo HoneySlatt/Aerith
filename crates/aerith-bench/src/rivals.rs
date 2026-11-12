@@ -502,10 +502,22 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
-        let output = Command::new(&wrapper)
-            .args(["--title=it's \"Aerith\"", "two words"])
-            .output()
-            .unwrap();
+        // Another test that starts a process while this one writes a script holds the script open
+        // in its child until that child's exec: running it then fails with "text file busy".
+        let output = (0..100)
+            .find_map(|_| {
+                match Command::new(&wrapper)
+                    .args(["--title=it's \"Aerith\"", "two words"])
+                    .output()
+                {
+                    Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
+                        thread::sleep(Duration::from_millis(10));
+                        None
+                    }
+                    other => Some(other.unwrap()),
+                }
+            })
+            .expect("the wrapper stayed busy for a second");
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8_lossy(&output.stdout)
