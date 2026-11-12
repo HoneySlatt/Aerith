@@ -12,6 +12,9 @@
 //! for the run's length it reads, each second, the engine's counters, the tree's memory and CPU
 //! and the GPU's power; it asks the engine what it decodes and outputs at the first frame and again two seconds in; then it
 //! stops everything it started.
+//!
+//! Aerith's run differs in one way: its testbed opens the clip itself, as Aerith would, and the
+//! bench only watches its mpv; the testbed quits by itself once the run's length has played.
 
 use std::fs;
 use std::io::{self, Read};
@@ -24,16 +27,23 @@ use serde_json::{Value, json};
 use crate::audio::{self, SilentAudio};
 use crate::engine::Counters;
 use crate::figures;
+use crate::presentation;
 use crate::process;
-use crate::rivals::{self, Rival};
+use crate::rivals::{self, Rival, Testbed};
 use crate::sampler::{self, Sampler};
 use crate::sandbox::Sandbox;
 use crate::serve::ClipServer;
 
 /// The version of `result.json`'s layout; a change to its fields raises it.
-pub const RESULT_FORMAT: u32 = 1;
+pub const RESULT_FORMAT: u32 = 2;
 /// When the engine is asked what it decodes and outputs, after the first frame: once it settled.
 const REPORT_AFTER: Duration = Duration::from_secs(2);
+/// The first seconds of frames presented that the figures leave out: the start settles.
+const SETTLE: f64 = 2.0;
+/// How long Aerith's testbed plays past the bench's last reading before it quits by itself, and
+/// how long the bench then waits for it.
+const TESTBED_MARGIN: f64 = 2.0;
+const TESTBED_EXIT: Duration = Duration::from_secs(15);
 /// How much of the clip is read before the run, to warm the cache.
 const WARM_BYTES: u64 = 256 << 20;
 
@@ -50,8 +60,14 @@ pub struct RunOptions {
     pub out: PathBuf,
     /// What the owner says of the display (`DP-3 3840x2160@240`): the bench cannot read it.
     pub display: String,
-    /// Options added to mpv alone's command line, as `name=value`.
+    /// Options added to mpv's command line, as `name=value`: mpv alone's, or Aerith's mpv's.
     pub mpv_options: Vec<String>,
+    /// For Aerith: the order of the surfaces, and how many times the controls show and hide.
+    pub order: Option<String>,
+    pub toggle_controls: Option<u32>,
+    /// The times, in seconds, of the frames to capture instead of measuring the playback, for
+    /// mpv alone and Aerith: each is written to `frame-<time>.png` in the run's folder.
+    pub frames: Vec<f64>,
     /// Serve the clip over HTTP on the loopback interface and play it as a stream.
     pub stream: bool,
     /// How long the GPU's idle power is read before the rival starts; zero skips it.
@@ -106,6 +122,7 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
         samples,
         logged_drops,
         logged_sync,
+        wayland_log,
     } = measured?;
 
     if let Some(device) = &played.sound_device {
@@ -147,12 +164,26 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
                "source": "mpv's properties, read over its IPC"})
     };
     let machine = figures::machine_figures(&playing, idle);
+    let presentation = match (&wayland_log, played.wayland_window) {
+        (Some(log), Some(window)) => {
+            presentation::figures(&presentation::parse(&read_window(log, window)?), SETTLE)
+        }
+        _ => Value::Null,
+    };
+    let testbed = if options.rival == Rival::Aerith {
+        testbed_figures(&fs::read_to_string(directory.join("player.log")).unwrap_or_default())
+    } else {
+        Value::Null
+    };
     let result = json!({
         "format": RESULT_FORMAT,
         "date": figures::iso_utc(started_at),
         "rival": options.rival.name(),
         "binary": binary.map(|path| path.display().to_string()),
         "mpv_options": options.mpv_options,
+        "order": options.order,
+        "frames_captured": played.captured,
+        "toggle_controls": options.toggle_controls,
         "clip": clip_name,
         "clip_path": clip.display().to_string(),
         "source": if options.stream { "HTTP on 127.0.0.1, served by the bench" } else { "local file" },
@@ -162,12 +193,15 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
         "seconds_asked": options.seconds,
         "seconds_played": played.seconds_played.map(|s| figures::round(s, 1)),
         "first_frame_ms": played.first_frame.map(|d| figures::round(d.as_secs_f64() * 1000.0, 1)),
-        "first_frame_marker": if options.rival == Rival::Kodi {
-            "Kodi's Player.OnAVStart notification after Player.Open"
-        } else {
-            "mpv's playback-restart event after loadfile"
+        "first_frame_marker": match options.rival {
+            Rival::Kodi => "Kodi's Player.OnAVStart notification after Player.Open",
+            Rival::Aerith => "mpv's playback-restart event after its start-file, the testbed opening the clip",
+            _ => "mpv's playback-restart event after loadfile",
         },
         "frames": frames,
+        "presentation": presentation,
+        "presentation_source": wayland_log.as_ref().map(|_| "the compositor's presentation feedback to mpv, from mpv's WAYLAND_DEBUG log, the first 2 s left out"),
+        "testbed": testbed,
         "sync": figures::sync_figures(logged_sync.as_deref().unwrap_or(&avsync)),
         "memory_mib": machine["memory_mib"],
         "cpu": machine["cpu"],
@@ -198,6 +232,7 @@ struct Measured {
     samples: Vec<sampler::Sample>,
     logged_drops: Option<u64>,
     logged_sync: Option<Vec<f64>>,
+    wayland_log: Option<PathBuf>,
 }
 
 /// Starts the silent sound server and the rival, plays the clip, and stops both, whatever happened.
@@ -219,7 +254,22 @@ fn measure(
     };
     let audio = SilentAudio::start(directory, sockets.join("audio"), &sandbox)?;
     warm(clip)?;
+    // Before the rival starts: Aerith's testbed opens the clip at its start.
+    let server = if options.stream {
+        Some(ClipServer::start(clip.to_owned())?)
+    } else {
+        None
+    };
+    let target = server
+        .as_ref()
+        .map_or_else(|| clip.display().to_string(), ClipServer::url);
     eprintln!("starting {}", options.rival.name());
+    let testbed = Testbed {
+        clip: target.clone(),
+        order: options.order.clone(),
+        toggle_controls: options.toggle_controls,
+        seconds: options.seconds + TESTBED_MARGIN,
+    };
     let mut running = rivals::launch(
         options.rival,
         directory,
@@ -227,25 +277,25 @@ fn measure(
         &sandbox,
         &audio.environment(),
         &options.mpv_options,
+        &testbed,
     )?;
     let sampler = Sampler::start(running.child.id(), audio.pids(), sensor);
-    let server = if options.stream {
-        Some(ClipServer::start(clip.to_owned()))
-    } else {
-        None
-    };
-    let outcome = match server.transpose() {
-        Ok(server) => {
-            let target = server
-                .as_ref()
-                .map_or_else(|| clip.display().to_string(), ClipServer::url);
-            play(&mut running.engine, &target, options.seconds, &sampler)
-        }
-        Err(error) => Err(error),
-    };
+    let outcome = play(
+        &mut running.engine,
+        options,
+        &target,
+        directory,
+        &sampler,
+        running.wayland_log.as_deref(),
+    );
     let logged_drops = running.engine.logged_drops();
     let logged_sync = running.engine.logged_sync();
-    running.engine.quit();
+    if options.rival == Rival::Aerith {
+        // The testbed quits by itself, and prints its summary then; mpv quits with it.
+        wait_exit(&mut running.child, TESTBED_EXIT);
+    } else {
+        running.engine.quit();
+    }
     // Read the guard once more: a device opened after the last second's reading counts too.
     let late_sound_device = sampler.sound_device_opened();
     let samples = sampler.finish();
@@ -258,6 +308,7 @@ fn measure(
         samples,
         logged_drops,
         logged_sync,
+        wayland_log: running.wayland_log,
     })
 }
 
@@ -285,17 +336,36 @@ struct Played {
     sound_device: Option<String>,
     /// An error after the first frame: the run keeps what it measured until then.
     error: Option<String>,
+    /// The part of the Wayland log written while the clip played: its length in bytes at the
+    /// first frame and at the last reading.
+    wayland_window: Option<(u64, u64)>,
+    /// The files of the frames captured.
+    captured: Vec<String>,
 }
 
-/// Loads the clip and reads the engine each second until `seconds` have played or the clip ends.
+/// Loads the clip, or for Aerith waits for its testbed to open it, and reads the engine each
+/// second until the run's seconds have played or the clip ends; or captures the frames asked.
 fn play(
     engine: &mut crate::engine::Engine,
+    options: &RunOptions,
     clip: &str,
-    seconds: f64,
+    directory: &Path,
     sampler: &Sampler,
+    wayland_log: Option<&Path>,
 ) -> io::Result<Played> {
-    let first_frame = engine.load(clip)?;
+    let seconds = options.seconds;
+    let first_frame = if options.rival == Rival::Aerith {
+        engine.wait_started()?
+    } else {
+        engine.load(clip)?
+    };
     let playing_since = Instant::now();
+    let log_length = || {
+        wayland_log
+            .and_then(|log| fs::metadata(log).ok())
+            .map(|meta| meta.len())
+    };
+    let log_start = log_length();
     let mut played = Played {
         first_frame: Some(first_frame),
         first_frame_at: Some(sampler.started().elapsed().as_secs_f64()),
@@ -304,7 +374,18 @@ fn play(
         report: Value::Null,
         sound_device: None,
         error: None,
+        wayland_window: None,
+        captured: Vec::new(),
     };
+    if !options.frames.is_empty() {
+        for at in &options.frames {
+            let name = format!("frame-{at}.png");
+            engine.capture(*at, &directory.join(&name))?;
+            played.captured.push(name);
+        }
+        played.seconds_played = Some(playing_since.elapsed().as_secs_f64());
+        return Ok(played);
+    }
     // At once, for a clip shorter than REPORT_AFTER; again once it settled, below.
     played.report = engine
         .report()
@@ -343,12 +424,81 @@ fn play(
         }
     }
     played.seconds_played = Some(playing_since.elapsed().as_secs_f64());
+    played.wayland_window = log_start.zip(log_length());
     if played.report.is_null() && played.error.is_none() {
         played.report = engine
             .report()
             .unwrap_or_else(|error| json!({"error": error.to_string()}));
     }
     Ok(played)
+}
+
+/// The bytes of `log` between the two lengths of `window`, as text.
+fn read_window(log: &Path, (start, end): (u64, u64)) -> io::Result<String> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = fs::File::open(log)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(end.saturating_sub(start))
+        .read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Waits up to `timeout` for `child` to exit by itself.
+fn wait_exit(child: &mut std::process::Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// What Aerith's testbed printed with `--stats` (its crate's documentation gives the format):
+/// its summary, and the wake-ups a second of the window's thread and of the relay's between the
+/// line 2 s after the open and the last one.
+fn testbed_figures(stats: &str) -> Value {
+    let lines: Vec<Value> = stats
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let summary = lines
+        .iter()
+        .rev()
+        .find(|line| line["summary"] == true)
+        .cloned();
+    let periodic: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["summary"] != true)
+        .collect();
+    let since = |line: &Value| line["since_open"].as_f64();
+    let first = periodic
+        .iter()
+        .find(|line| since(line).is_some_and(|at| at >= SETTLE));
+    let last = periodic.last();
+    let rate = |thread: &str| -> Value {
+        let (Some(first), Some(last)) = (first, last) else {
+            return Value::Null;
+        };
+        let span = since(last)
+            .zip(since(first))
+            .map(|(end, start)| end - start);
+        let wakes = last[thread]["voluntary"]
+            .as_f64()
+            .zip(first[thread]["voluntary"].as_f64());
+        match (span, wakes) {
+            (Some(span), Some((end, start))) if span > 0.0 => {
+                json!(figures::round((end - start) / span, 1))
+            }
+            _ => Value::Null,
+        }
+    };
+    json!({
+        "summary": summary,
+        "last": last.map(|line| (*line).clone()),
+        "wake_ups_per_second": {"main_thread": rate("main_thread"), "relay_thread": rate("relay_thread")},
+    })
 }
 
 fn value_of(counters: &Counters, name: &str) -> Option<f64> {
@@ -385,4 +535,32 @@ fn machine_description() -> Value {
         "cpu": cpu,
         "kernel": read("/proc/sys/kernel/osrelease"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_testbeds_wake_ups_are_counted_from_two_seconds_after_the_open() {
+        let line = |at: f64, main: u64, relay: u64| {
+            format!(
+                "{{\"since_open\":{at},\"main_thread\":{{\"voluntary\":{main},\"involuntary\":0}},\"relay_thread\":{{\"voluntary\":{relay},\"involuntary\":0}}}}"
+            )
+        };
+        let stats = [
+            line(1.0, 10, 10),
+            line(2.0, 100, 200),
+            "first frame after 70 ms".to_owned(),
+            line(4.0, 200, 500),
+            "{\"summary\":true,\"first_frame_ms\":70.1,\"since_open\":4.5}".to_owned(),
+        ]
+        .join("\n");
+        let figures = testbed_figures(&stats);
+        assert_eq!(figures["wake_ups_per_second"]["main_thread"], 50.0);
+        assert_eq!(figures["wake_ups_per_second"]["relay_thread"], 150.0);
+        assert_eq!(figures["summary"]["first_frame_ms"], 70.1);
+        assert_eq!(figures["last"]["since_open"], 4.0);
+        assert!(testbed_figures("")["wake_ups_per_second"]["main_thread"].is_null());
+    }
 }

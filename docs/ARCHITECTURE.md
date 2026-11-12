@@ -150,16 +150,19 @@ winit's loop ◀── open, pause, controls, quit ── aerith-testbed-schedul
 ## The bench
 
 `aerith-bench` is a program apart, not part of what users run ([ADR-0013](adr/0013-the-bench.md)).
-It depends on nothing of Aerith yet; at M1.4b it will measure Aerith through `aerith-testbed`.
+It depends on no crate of Aerith's: it measures Aerith by running `aerith-testbed`, as it runs a
+rival, and watching the testbed's mpv over an IPC socket of the bench's.
 
 - `run` makes one run: `sandbox` is the bubblewrap namespace every program of the run starts in
   (no sound device, the run's own home), `audio` starts the silent sound server, `rivals` starts a
-  rival, `engine` drives the rival's engine over
+  rival or Aerith's testbed, `engine` drives the rival's engine over
   `json_stream` (mpv's IPC, Kodi's JSON-RPC), `sampler` reads memory, CPU and GPU power each
-  second, `serve` serves the clip over HTTP when the run is a stream, and `figures` turns the
-  readings into the figures of `result.json`.
+  second, `serve` serves the clip over HTTP when the run is a stream, `presentation` reads the
+  compositor's presentation feedback from mpv's Wayland log, and `figures` turns the readings into
+  the figures of `result.json`.
 - `scripts/corpus.sh` makes the corpus it plays ([ADR-0012](adr/0012-the-test-corpus.md));
-  `scripts/bench-rivals.sh` runs its set of measures on every rival.
+  `scripts/bench-rivals.sh` runs its set of measures on every rival; `scripts/bench-window.sh`
+  measures Aerith inside its window against mpv alone.
 
 ## Rules that hold across parts
 

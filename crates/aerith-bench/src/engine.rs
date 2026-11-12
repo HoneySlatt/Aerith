@@ -172,6 +172,48 @@ impl Engine {
         Ok(started.elapsed())
     }
 
+    /// Waits for the clip that the player opened by itself (Aerith's testbed opens its own) to
+    /// show its first frame, and returns the time from mpv's `start-file` event to its
+    /// `playback-restart`. mpv opens the bench's socket at its start, before the player opens the
+    /// clip, so the bench sees both events.
+    pub fn wait_started(&mut self) -> io::Result<Duration> {
+        let Engine::Mpv(ipc) = self else {
+            return Err(io::Error::other("only an mpv engine is observed"));
+        };
+        let deadline = Instant::now() + FIRST_FRAME;
+        wait_for(ipc, "start-file", deadline)?;
+        let started = Instant::now();
+        wait_for(ipc, "playback-restart", deadline)?;
+        let elapsed = started.elapsed();
+        let video = ipc.request(
+            json!({"command": ["get_property", "vo-configured"]}),
+            ANSWER,
+        )?;
+        if video["data"] != true {
+            return Err(io::Error::other(
+                "mpv shows no video: its video output failed (see mpv.log)",
+            ));
+        }
+        Ok(elapsed)
+    }
+
+    /// Shows the frame at `at` seconds, paused, and has mpv write it to `path` as it draws it in
+    /// its window (`screenshot-to-file ... window`): scaled to the window, as on screen.
+    pub fn capture(&mut self, at: f64, path: &Path) -> io::Result<()> {
+        let Engine::Mpv(ipc) = self else {
+            return Err(io::Error::other("only mpv can capture its frames"));
+        };
+        checked(ipc.request(json!({"command": ["set_property", "pause", true]}), ANSWER)?)?;
+        drain(ipc, "playback-restart")?;
+        checked(ipc.request(json!({"command": ["seek", at, "absolute+exact"]}), ANSWER)?)?;
+        wait_for(ipc, "playback-restart", Instant::now() + FIRST_FRAME)?;
+        checked(ipc.request(
+            json!({"command": ["screenshot-to-file", path.display().to_string(), "window"]}),
+            FIRST_FRAME,
+        )?)?;
+        Ok(())
+    }
+
     /// Reads the engine's counters. The events that came since the last reading are read too, to
     /// see whether the clip ended.
     pub fn counters(&mut self) -> io::Result<Counters> {

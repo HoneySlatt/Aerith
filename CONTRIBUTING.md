@@ -299,6 +299,30 @@ The bench needs a desktop session. In an agent's service, `agent-headless --` ru
 GPU, which checks that it works but gives no figure: mpv alone needs `--mpv-option gpu-sw=yes`
 there, or `BENCH_MPV_OPTIONS=gpu-sw=yes` for the script. On the owner's desktop, an agent runs it through `owner-desktop --`, with the owner's go.
 
+### Aerith inside its window
+
+`aerith` is a player of the bench too: `aerith-bench run aerith <clip>` runs `aerith-testbed` from
+`PATH`, fullscreen, which opens the clip itself and plays it through `aerith-player`. The bench
+gives the testbed a wrapper as its mpv: the same mpv as mpv alone, with the bench's IPC socket
+added, through which the bench reads mpv's counters without driving it. `--order below|above`
+chooses the order of the surfaces, `--toggle-controls N` shows and hides the controls N times,
+and `--mpv-option` adds an option to that mpv. For mpv alone and Aerith, the bench reads the
+compositor's presentation feedback from mpv's Wayland messages (`WAYLAND_DEBUG=client`): the
+frames presented, those scanned out (`zero_copy`), and the refresh gaps between them, a frame
+off cadence being one whose gap is neither of the two whole numbers around the run's mean.
+`--frames 5,20,40` captures the frames at those times instead of measuring the playback, as mpv
+draws them in its window.
+
+```sh
+scripts/bench-window.sh <corpus> "<display>" [cadence|toggles|sync|frames]...
+```
+
+runs M1.4b's measures at the screen's current rate: every SDR cadence clip in mpv alone and in
+Aerith in each order, 60 toggles of the controls, display sync, and the frames compared with mpv
+alone's (PSNR, `inf` for the same picture). `BENCH_SECONDS` sets each run's length (120 by
+default; about 80 minutes for every part); the script's header gives each part's time. It
+builds the testbed and puts it on `PATH` itself.
+
 ### On the lowest laptop
 
 The owner runs this on the HP Laptop 17-ca2xxx, plugged in, nothing else open:

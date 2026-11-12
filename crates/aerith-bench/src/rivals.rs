@@ -14,10 +14,21 @@
 //!   drives mpv alone. Their own options (hardware decoding, video sync) stay as the rival sets
 //!   them, but the clip is loaded by the bench, not through their interface: the time to the first
 //!   frame is their engine's, not their interface's.
+//! - **Aerith** itself, through its test window, `aerith-testbed` ([ADR-0017]): the testbed opens
+//!   the clip, as Aerith would, and plays it through `aerith-player` in its plane. The bench names
+//!   the testbed's mpv: a wrapper of the bench's that runs the same mpv as mpv alone with the
+//!   bench's IPC socket and log added after the player's options, so that the bench reads that
+//!   mpv's counters as it reads mpv alone's, without driving it.
+//!
+//! mpv alone and Aerith's mpv log their Wayland messages (`WAYLAND_DEBUG=client`), from which
+//! [`crate::presentation`] reads what the compositor did with each frame.
+//!
+//! [ADR-0017]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0017-a-test-interface-on-winit-and-wgpu.md
 
 use std::fs;
 use std::io;
 use std::net::TcpStream;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -45,11 +56,19 @@ pub enum Rival {
     Stremio,
     /// Jellyfin Desktop.
     Jellyfin,
+    /// Aerith, through its test window.
+    Aerith,
 }
 
 impl Rival {
-    /// Every rival, in the order the ROADMAP names them.
-    pub const ALL: [Rival; 4] = [Rival::Mpv, Rival::Kodi, Rival::Stremio, Rival::Jellyfin];
+    /// Every player the bench runs: the rivals, in the order the ROADMAP names them, then Aerith.
+    pub const ALL: [Rival; 5] = [
+        Rival::Mpv,
+        Rival::Kodi,
+        Rival::Stremio,
+        Rival::Jellyfin,
+        Rival::Aerith,
+    ];
 
     /// The rival a command line names.
     pub fn from_name(name: &str) -> Option<Self> {
@@ -63,6 +82,7 @@ impl Rival {
             Rival::Kodi => "kodi",
             Rival::Stremio => "stremio",
             Rival::Jellyfin => "jellyfin",
+            Rival::Aerith => "aerith",
         }
     }
 
@@ -73,6 +93,7 @@ impl Rival {
             Rival::Kodi => "kodi",
             Rival::Stremio => "stremio",
             Rival::Jellyfin => "jellyfin-desktop",
+            Rival::Aerith => "aerith-testbed",
         }
     }
 }
@@ -83,11 +104,27 @@ pub struct Running {
     pub child: Child,
     /// Its engine, connected.
     pub engine: Engine,
+    /// The log of the engine's Wayland messages, for mpv alone and Aerith.
+    pub wayland_log: Option<PathBuf>,
+}
+
+/// What Aerith's run asks of its testbed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Testbed {
+    /// The clip, a path or a URL, which the testbed opens itself.
+    pub clip: String,
+    /// The order of the surfaces, `below` or `above`; the testbed's default when `None`.
+    pub order: Option<String>,
+    /// How many times the controls show and hide, from one second after the first frame.
+    pub toggle_controls: Option<u32>,
+    /// How long the testbed plays after its first frame before it quits by itself.
+    pub seconds: f64,
 }
 
 /// Starts `rival` with its profile under `directory`, its environment extended by `environment`
 /// (the silent sound server's), and connects to its engine; an mpv engine opens its IPC at
-/// `socket`. `mpv_options` are added to mpv alone's command line, as `--name=value`.
+/// `socket`. `mpv_options` are added to mpv's command line, as `--name=value`, for mpv alone and
+/// Aerith's mpv. Aerith's testbed plays as `testbed` says.
 pub fn launch(
     rival: Rival,
     directory: &Path,
@@ -95,6 +132,7 @@ pub fn launch(
     sandbox: &Sandbox,
     environment: &[(String, String)],
     mpv_options: &[String],
+    testbed: &Testbed,
 ) -> io::Result<Running> {
     let mut command = player_command(rival, directory, sandbox, environment, "player")?;
     match rival {
@@ -117,8 +155,36 @@ pub fn launch(
                 directory.join("mpv.log").display()
             ));
             command.args(mpv_options.iter().map(|option| format!("--{option}")));
+            command.env("WAYLAND_DEBUG", "client");
             let child = command.spawn()?;
-            connected(child, || Engine::connect_mpv(socket, START))
+            let log = directory.join("player.err");
+            connected(child, Some(log), || Engine::connect_mpv(socket, START))
+        }
+        Rival::Aerith => {
+            let mpv = process::resolve("mpv").ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no mpv in PATH for Aerith to run")
+            })?;
+            let wrapper = directory.join("mpv-wrapper");
+            let log = directory.join("mpv-wayland.log");
+            fs::write(
+                &wrapper,
+                mpv_wrapper(&mpv, socket, &directory.join("mpv.log"), &log, mpv_options),
+            )?;
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
+            command
+                .arg(&testbed.clip)
+                .args(["--fullscreen", "--stats", "--sound", "--seconds"])
+                .arg(testbed.seconds.to_string())
+                .arg("--mpv")
+                .arg(&wrapper);
+            if let Some(order) = &testbed.order {
+                command.args(["--order", order]);
+            }
+            if let Some(toggles) = testbed.toggle_controls {
+                command.args(["--toggle-controls", &toggles.to_string()]);
+            }
+            let child = command.spawn()?;
+            connected(child, Some(log), || Engine::connect_mpv(socket, START))
         }
         Rival::Kodi => {
             if TcpStream::connect(("127.0.0.1", KODI_PORT)).is_ok() {
@@ -139,7 +205,7 @@ pub fn launch(
                     "--debug",
                 ]);
             let child = command.spawn()?;
-            connected(child, || {
+            connected(child, None, || {
                 Engine::connect_kodi(KODI_PORT, temp.join("kodi.log"), START)
             })
         }
@@ -150,7 +216,7 @@ pub fn launch(
                 .arg("--url")
                 .arg(format!("file://{}", page.display()));
             let child = command.spawn()?;
-            connected(child, || Engine::connect_mpv(socket, START))
+            connected(child, None, || Engine::connect_mpv(socket, START))
         }
         Rival::Jellyfin => {
             let page = directory.join("jellyfin.html");
@@ -159,7 +225,7 @@ pub fn launch(
             prepare_jellyfin(&config, &page, sandbox, environment, directory)?;
             command.arg(format!("--config-dir={}", config.display()));
             let child = command.spawn()?;
-            connected(child, || Engine::connect_mpv(socket, START))
+            connected(child, None, || Engine::connect_mpv(socket, START))
         }
     }
 }
@@ -201,10 +267,49 @@ fn player_command(
     Ok(command)
 }
 
+/// The script Aerith's testbed runs as mpv: `mpv` with the player's arguments, then the bench's
+/// IPC socket, its log and `mpv_options`, its Wayland messages appended to `wayland_log`.
+fn mpv_wrapper(
+    mpv: &Path,
+    socket: &Path,
+    mpv_log: &Path,
+    wayland_log: &Path,
+    mpv_options: &[String],
+) -> String {
+    let mut line = format!(
+        "WAYLAND_DEBUG=client exec {} \"$@\" {} {}",
+        shell_quoted(&mpv.display().to_string()),
+        shell_quoted(&format!("--input-ipc-server={}", socket.display())),
+        shell_quoted(&format!("--log-file={}", mpv_log.display())),
+    );
+    for option in mpv_options {
+        line.push(' ');
+        line.push_str(&shell_quoted(&format!("--{option}")));
+    }
+    line.push_str(&format!(
+        " 2>>{}",
+        shell_quoted(&wayland_log.display().to_string())
+    ));
+    format!("#!/bin/sh\n# Written by aerith-bench: Aerith's mpv, observed by the bench.\n{line}\n")
+}
+
+/// `text` as one word of a POSIX shell.
+fn shell_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
 /// Connects to the engine of a rival just started; stops the rival if that fails.
-fn connected(child: Child, connect: impl FnOnce() -> io::Result<Engine>) -> io::Result<Running> {
+fn connected(
+    child: Child,
+    wayland_log: Option<PathBuf>,
+    connect: impl FnOnce() -> io::Result<Engine>,
+) -> io::Result<Running> {
     match connect() {
-        Ok(engine) => Ok(Running { child, engine }),
+        Ok(engine) => Ok(Running {
+            child,
+            engine,
+            wayland_log,
+        }),
         Err(error) => {
             stop_tree(child);
             Err(error)
@@ -370,6 +475,57 @@ fn find_file(directory: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wrapper_runs_mpv_with_every_argument_intact_and_the_benchs_after() {
+        let root =
+            std::env::temp_dir().join(format!("aerith-bench-wrapper-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let mpv = root.join("fake mpv");
+        fs::write(
+            &mpv,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\"\necho \"$WAYLAND_DEBUG\" >&2\n",
+        )
+        .unwrap();
+        fs::set_permissions(&mpv, fs::Permissions::from_mode(0o755)).unwrap();
+        let wrapper = root.join("wrapper");
+        let log = root.join("it's wayland.log");
+        fs::write(
+            &wrapper,
+            mpv_wrapper(
+                &mpv,
+                Path::new("/tmp/a socket"),
+                Path::new("/tmp/mpv.log"),
+                &log,
+                &["video-sync=display-resample".to_owned()],
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = Command::new(&wrapper)
+            .args(["--title=it's \"Aerith\"", "two words"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .collect::<Vec<_>>(),
+            [
+                "--title=it's \"Aerith\"",
+                "two words",
+                "--input-ipc-server=/tmp/a socket",
+                "--log-file=/tmp/mpv.log",
+                "--video-sync=display-resample",
+            ]
+        );
+        assert_eq!(
+            fs::read_to_string(&log).unwrap(),
+            "client\n",
+            "the Wayland log"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rivals_are_named_both_ways() {

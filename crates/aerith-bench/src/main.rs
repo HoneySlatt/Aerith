@@ -2,12 +2,13 @@
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! The bench of Stage 1 ([ADR-0013]): it plays a clip of the test corpus ([ADR-0012]) in one of
-//! the rivals, and measures what the quality bar asks: the time to the first frame, the frames
+//! the rivals, or in Aerith itself through its test window, and measures what the quality bar asks: the time to the first frame, the frames
 //! dropped, delayed or mistimed, the audio-video difference, memory, CPU and the GPU's power.
 //!
 //! ```text
 //! aerith-bench run <rival> <clip> [--stream] [--seconds N] [--idle N] [--out DIR]
 //!                  [--display TEXT] [--mpv-option NAME=VALUE]...
+//!                  [--order below|above] [--toggle-controls N] [--frames T,T...]
 //! aerith-bench table <result.json>...
 //! ```
 //!
@@ -26,6 +27,8 @@ mod figures;
 #[cfg(target_os = "linux")]
 mod json_stream;
 #[cfg(target_os = "linux")]
+mod presentation;
+#[cfg(target_os = "linux")]
 mod process;
 #[cfg(target_os = "linux")]
 mod rivals;
@@ -41,8 +44,9 @@ mod serve;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage:
-  aerith-bench run <mpv|kodi|stremio|jellyfin> <clip> [--stream] [--seconds N] [--idle N]
-                   [--out DIR] [--display TEXT] [--mpv-option NAME=VALUE]...
+  aerith-bench run <mpv|kodi|stremio|jellyfin|aerith> <clip> [--stream] [--seconds N]
+                   [--idle N] [--out DIR] [--display TEXT] [--mpv-option NAME=VALUE]...
+                   [--order below|above] [--toggle-controls N] [--frames T,T...]
   aerith-bench table <result.json>...";
 
 fn main() -> ExitCode {
@@ -122,6 +126,9 @@ fn parse_run(arguments: &[String]) -> Result<run::RunOptions, String> {
     let mut mpv_options = Vec::new();
     let mut stream = false;
     let mut idle = std::time::Duration::from_secs(10);
+    let mut order = None;
+    let mut toggle_controls = None;
+    let mut frames = Vec::new();
     let mut rest = arguments.iter();
     while let Some(argument) = rest.next() {
         let mut value = || {
@@ -148,6 +155,33 @@ fn parse_run(arguments: &[String]) -> Result<run::RunOptions, String> {
                     .ok_or("--idle needs a whole number of seconds, at most 3600")?;
             }
             "--display" => display = value()?,
+            "--order" => {
+                let value = value()?;
+                if value != "below" && value != "above" {
+                    return Err(format!("--order takes below or above, not {value}"));
+                }
+                order = Some(value);
+            }
+            "--frames" => {
+                frames = value()?
+                    .split(',')
+                    .map(|time| {
+                        time.parse::<f64>()
+                            .ok()
+                            .filter(|t| t.is_finite() && *t >= 0.0)
+                    })
+                    .collect::<Option<Vec<f64>>>()
+                    .ok_or("--frames takes times in seconds, separated by commas")?;
+            }
+            "--toggle-controls" => {
+                toggle_controls = Some(
+                    value()?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|times| (1..=10_000).contains(times))
+                        .ok_or("--toggle-controls needs a whole number from 1 to 10000")?,
+                );
+            }
             "--mpv-option" => {
                 let option = value()?;
                 let Some((name, _)) = option.split_once('=').filter(|_| !option.starts_with('-'))
@@ -167,10 +201,18 @@ fn parse_run(arguments: &[String]) -> Result<run::RunOptions, String> {
         return Err("run needs a rival and a clip".to_owned());
     };
     let rival = rivals::Rival::from_name(rival).ok_or(format!("unknown rival {rival}"))?;
-    if !mpv_options.is_empty() && rival != rivals::Rival::Mpv {
+    let mpv = matches!(rival, rivals::Rival::Mpv | rivals::Rival::Aerith);
+    if !mpv_options.is_empty() && !mpv {
         return Err(
-            "--mpv-option applies to mpv alone; the others keep their own options".to_owned(),
+            "--mpv-option applies to mpv alone and Aerith's mpv; the others keep their own options"
+                .to_owned(),
         );
+    }
+    if !frames.is_empty() && !mpv {
+        return Err("--frames applies to mpv alone and Aerith".to_owned());
+    }
+    if (order.is_some() || toggle_controls.is_some()) && rival != rivals::Rival::Aerith {
+        return Err("--order and --toggle-controls apply to Aerith's testbed only".to_owned());
     }
     Ok(run::RunOptions {
         rival,
@@ -179,6 +221,9 @@ fn parse_run(arguments: &[String]) -> Result<run::RunOptions, String> {
         out,
         display,
         mpv_options,
+        order,
+        toggle_controls,
+        frames,
         stream,
         idle,
     })
@@ -234,6 +279,15 @@ mod tests {
         assert_eq!(options.mpv_options, ["video-sync=display-resample"]);
         assert!(options.stream);
         assert!(options.idle.is_zero());
+        let aerith = parse_run(&arguments(
+            "aerith clip.mkv --order above --toggle-controls 60 --mpv-option video-sync=display-resample --frames 5,20.5",
+        ))
+        .unwrap();
+        assert_eq!(aerith.rival, Rival::Aerith);
+        assert_eq!(aerith.order.as_deref(), Some("above"));
+        assert_eq!(aerith.toggle_controls, Some(60));
+        assert_eq!(aerith.frames, [5.0, 20.5]);
+        assert_eq!(aerith.mpv_options, ["video-sync=display-resample"]);
     }
 
     #[test]
@@ -252,6 +306,13 @@ mod tests {
             "mpv clip.mkv --mpv-option novalue",
             "mpv clip.mkv --mpv-option --vo=x",
             "kodi clip.mkv --mpv-option hwdec=no",
+            "mpv clip.mkv --order above",
+            "aerith clip.mkv --order sideways",
+            "aerith clip.mkv --toggle-controls 0",
+            "aerith clip.mkv --frames 5,x",
+            "aerith clip.mkv --frames -1",
+            "kodi clip.mkv --frames 5",
+            "aerith clip.mkv --mpv-option input-ipc-server=/tmp/x",
             "mpv a.mkv b.mkv",
         ] {
             assert!(

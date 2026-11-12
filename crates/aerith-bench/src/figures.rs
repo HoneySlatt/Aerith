@@ -98,7 +98,7 @@ pub fn round(value: f64, places: i32) -> f64 {
 }
 
 /// The header of the table that compares runs, in Markdown.
-pub const TABLE_HEADER: &str = "| Rival | Clip | First frame | Dropped | Decoder dropped | Delayed | Mistimed | Sync, max / p99 | Memory, peak PSS | CPU, one core | Other programs | GPU power over idle |\n|---|---|---|---|---|---|---|---|---|---|---|---|";
+pub const TABLE_HEADER: &str = "| Rival | Clip | First frame | Dropped | Decoder dropped | Delayed | Mistimed | Off cadence / presented | Scanned out | Sync, max / p99 | Memory, peak PSS | CPU, one core | Other programs | GPU power over idle |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 /// One row of the table, from a run's result.
 pub fn table_row(result: &Value) -> String {
@@ -118,15 +118,31 @@ pub fn table_row(result: &Value) -> String {
             text(&sync["p99_abs_ms"], " ms")
         )
     };
+    let presentation = &result["presentation"];
+    let cadence = if presentation.is_null() {
+        "–".to_owned()
+    } else {
+        format!(
+            "{} / {}",
+            text(&presentation["refresh_gaps"]["off_cadence"], ""),
+            text(&presentation["presented"], "")
+        )
+    };
+    let rival = match (result["rival"].as_str(), result["order"].as_str()) {
+        (Some(rival), Some(order)) => format!("{rival}, {order}"),
+        (rival, _) => rival.unwrap_or("?").to_owned(),
+    };
     format!(
-        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-        result["rival"].as_str().unwrap_or("?"),
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        rival,
         result["clip"].as_str().unwrap_or("?"),
         text(&result["first_frame_ms"], " ms"),
         text(&frames["dropped"], ""),
         text(&frames["decoder_dropped"], ""),
         text(&frames["delayed"], ""),
         text(&frames["mistimed"], ""),
+        cadence,
+        text(&presentation["zero_copy"], ""),
         sync,
         text(&result["memory_mib"]["peak_pss"], " MiB"),
         text(&result["cpu"]["percent_of_one_core"], " %"),
@@ -235,7 +251,18 @@ mod tests {
         });
         assert_eq!(
             table_row(&result),
-            "| kodi | hdr10 | 412.0 ms | 3 | – | – | – | – | 300.5 MiB | 12.5 % | – | – |"
+            "| kodi | hdr10 | 412.0 ms | 3 | – | – | – | – | – | – | 300.5 MiB | 12.5 % | – | – |"
+        );
+        let aerith = json!({
+            "rival": "aerith", "order": "above", "clip": "cadence-23.976", "first_frame_ms": 70.0,
+            "frames": {"dropped": 0, "decoder_dropped": 0, "delayed": 0, "mistimed": 1},
+            "presentation": {"presented": 1440, "zero_copy": 1440, "refresh_gaps": {"off_cadence": 2}},
+            "sync": null, "memory_mib": {"peak_pss": null}, "cpu": {"percent_of_one_core": null},
+            "gpu_power_w": {"playing_minus_idle": null},
+        });
+        assert_eq!(
+            table_row(&aerith),
+            "| aerith, above | cadence-23.976 | 70.0 ms | 0 | 0 | 0 | 1 | 2 / 1440 | 1440 | – | – | – | – | – |"
         );
         assert_eq!(
             TABLE_HEADER.lines().next().unwrap().matches('|').count(),
