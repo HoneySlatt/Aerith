@@ -60,12 +60,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **Done when.** `nix develop -c scripts/check.sh` passes locally and CI is green.
 - **How to test.** `nix develop -c scripts/check.sh`.
 - **Measured.** The check's time, warm and cold; CI's job time (under 20 min).
-- **Result.** Done on 2026-11-11, CI green (42 s on Linux, 35 s on Windows). Beyond what it was to deliver: a
-  check that every file carries the MPL-2.0 header, one on `AGENTS.md`'s length,
-  `scripts/test-check.sh`, which proves that each check fails when it should, and a Windows job in
-  CI for the lints, the tests and the documentation. `deny.toml` admits MPL-2.0 and permissive
-  licences, and the LGPL crate by crate after a review, as ADR-0002 allows. Figures in
-  [`measurements.md`](measurements.md#m11--the-workspace-and-its-checks).
+- **Result.** Done on 2026-11-11, CI green; with it a check of every file's MPL-2.0 header, of
+  `AGENTS.md`'s length, `scripts/test-check.sh` proving that each check fails when it should, and
+  a Windows job ([figures](measurements.md#m11--the-workspace-and-its-checks)).
 
 ### M1.2 — The rivals measured and the corpus
 
@@ -106,17 +103,11 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   never a crash of Aerith.
 - **How to test.** `cargo test -p aerith-player`.
 - **Measured.** Press-to-first-frame against M1.2's figure; at rest, no wake-up of Aerith's own.
-- **Result.** Done on 2026-11-11 ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-  `Player` opens a file or an `http(s)` stream with its headers, plays, pauses, seeks and stops
-  it; each open is numbered, its events carry the number and end exactly once. No secret reaches
-  a command line, a title or a log. Tests: 46 unit tests, most against a fake mpv; 12 against the
-  real mpv, in CI; the whole corpus by hand, which passes. At rest, 0 wake-ups of Aerith's own,
-  asserted. The closing review and its check found six defects, all fixed with tests
-  ([figures](measurements.md#m13--mpv-driven-through-aerith-player)).
-- **First frame on the desktop** ([figures](measurements.md#against-m12-on-the-desktop)): through
-  the player, 244 to 249 ms; mpv alone, once settled, 126 to 149 ms. The gap is probably the
-  player's window and video output opening at the first load: M1.4a keeps them ready before Play,
-  and measures it. To compare again once M1.2 is complete.
+- **Result.** Done on 2026-11-11 ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md),
+  [figures](measurements.md#m13--mpv-driven-through-aerith-player)): files and `http(s)` streams
+  played, paused, sought and stopped, no secret on a command line, 0 wake-ups at rest, asserted.
+  Its first frame was slower than mpv alone's; M1.4a's window ready before Play brought it to
+  about 70 ms.
 
 ### M1.4a — The relay and the test interface
 
@@ -140,22 +131,12 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **Measured.** The first frame; at rest, 0 wake-ups of the player's and the relay's threads; the
   interface thread's and the relay's wake-ups a second while a film plays; mpv's memory while idle
   with its window ready; the check's and CI's time before and after.
-- **Where it stands** (2026-11-11).
-  - Done:
-    - the clock ([ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md));
-    - the relay, reviewed, corrected and fuzzed
-      ([ADR-0018](adr/0018-what-building-the-relay-changed.md)), with its tests against a fake
-      compositor and the real mpv
-      ([figures](measurements.md#the-relay-against-a-fake-compositor)).
-    - the testbed ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)), run in
-      `agent-headless` in both orders, asleep while paused.
-    - on the owner's display ([figures](measurements.md#inside-the-testbed-on-the-desktop)), on
-      Umbriel with real dma-bufs:
-      - the corpus's 14 SDR clips played in the order below, 3 of them in the order above too;
-      - the first frame in about 70 ms with caches kept, against about 80 ms for mpv alone;
-      - the window's thread woke about 50 times a second while a film played, the relay's 142.
-    - the closing review, its findings fixed or recorded below.
-  - Done on 2026-11-12.
+- **Result.** Done on 2026-11-12: the clock
+  ([ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md)); the relay, reviewed, corrected and
+  fuzzed ([ADR-0018](adr/0018-what-building-the-relay-changed.md)); the testbed
+  ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)). On the owner's display, the
+  corpus's SDR clips played inside the testbed, the first frame in about 70 ms with caches kept
+  ([figures](measurements.md#inside-the-testbed-on-the-desktop)).
 
 ### M1.4b — Inside the window, measured
 
@@ -180,55 +161,25 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **How to test.** The bench, on the owner's display.
 - **Measured.** Cadence, sync, power and memory against mpv alone.
 - **By hand.** The owner watches the clips, and switches the monitor to 60 Hz and to VRR.
-- **Where it stands** (2026-11-12).
-  - Done:
-    - the cause of no scanout: mpv's buffers carry alpha, and the relay dropped the opaque region
-      mpv sets; it now passes it (`577cbd1`), and Umbriel scans the video out in the order above;
-    - the bench measures Aerith through the testbed, and reads the compositor's presentation
-      feedback for mpv alone and Aerith alike; `scripts/bench-window.sh` runs this milestone's
-      measures ([CONTRIBUTING](../CONTRIBUTING.md#aerith-inside-its-window));
-    - a first pass on the desktop, 3 minutes at 240 Hz
-      ([figures](measurements.md#a-first-pass-on-the-desktop)), beside another session's load:
-      mpv alone keeps cadence no better than Aerith, about a third of gaps off the ideal; Aerith's
-      frames differ from mpv alone's by
-      one step of 8-bit dithering, as mpv dithers to 8 bits without colour management.
-    - the series at 240 Hz ([figures](measurements.md#the-series-at-240-hz)), stopped by the
-      owner before 59.94 fps under display sync, the frames and the order below's toggles:
-      - under audio sync, no player meets the cadence floor: 3 % to 23 % of gaps off, mpv alone
-        as Aerith. Umbriel offers no `wp_fifo_v1`, so mpv paces itself in MAILBOX;
-      - under display sync, mpv presents at every refresh: a handful of corrections a minute,
-        but 5 to 9 W more and the relay waking about 1,000 times a second;
-      - the order above scans the video out and, under display sync, costs 2 to 4 W less.
-    - the relay offers mpv `wp_fifo_v1` when the compositor has it, as mpv alone gets it: under
-      KWin 6.8 in `agent-headless` (`kwin_wayland --virtual`), mpv inside the testbed waits on
-      the plane's fifo. That run found mpv told its output before its scale, now fixed.
-  - The rest of the 240 Hz series taken on 2026-11-12
-    ([figures](measurements.md#the-series-at-240-hz)): under display sync at 59.94 fps the order
-    above costs least again; toggling the controls adds no hitch in the order below and about 28
-    in the order above; the frames match mpv alone's but for its dithering.
-  - Under KWin, with fifo ([figures](measurements.md#under-kwin-with-fifo)): fifo mends the
-    cadence at 25 fps, not at 23.976 and 59.94 fps on 240 Hz, where only display sync holds it.
-    Under fifo, mpv's own feedback covers one frame in two: mpv alone's cadence is not measured
-    there; the relay's count, by time on KWin, covers Aerith's.
-  - With VRR, under KWin, beside another session's load
-    ([figures](measurements.md#with-vrr-under-kwin)): 4 % to 19 % of Aerith's frames show more
-    than half a refresh early or late, mpv alone's 6 % to 33 %: no player keeps an even cadence
-    under audio sync. To take again quiet; display sync under VRR not measured.
-  - With VRR, under Umbriel ([figures](measurements.md#with-vrr-under-umbriel)): under audio
-    sync, VRR keeps the cadence on a quiet machine (2 to 8 spans off of about 1,400 on 24 fps);
-    load breaks it in every player. Display sync defeats VRR: mpv presents at every refresh, 181
-    to 681 frames delayed a minute, 7 to 11 W more.
-  - The order of the surfaces decided on 2026-11-12: the video above a black root
-    ([ADR-0019](adr/0019-the-video-above-a-black-root.md)), to be confirmed in a uwui session.
-    What measuring changed in the relay: [ADR-0020](adr/0020-what-measuring-the-relay-changed.md).
-  - The rule of display sync decided on 2026-11-12: display sync at a fixed rate, audio sync
-    under VRR, the relay telling which
-    ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). It is not built:
-    the cadence floor is not met at a fixed rate until it is.
-  - Left: the closing review. VRR on a quiet machine and the floor's 30 minutes go to M1.4c.
-  - M1.4a's open questions answered on 2026-11-12: ADR-0018 validated; `rustix` kept as a direct
-    dependency of the player; a minute of fuzzing in CI, in a job of its own; the window thread's
-    wake-ups kept until Stage 3.
+- **Result.** Done on 2026-11-12, all at 240 Hz and under VRR on the high tier
+  ([figures](measurements.md#m14b--inside-the-window-measured)):
+  - the relay passes mpv's opaque region, so the compositor can scan the video out, and offers
+    mpv the compositor's fifo ([ADR-0020](adr/0020-what-measuring-the-relay-changed.md)); it tells
+    mpv its outputs only after its scale and first commit, which KWin needed;
+  - the bench measures Aerith through the testbed, and reads the compositor's presentation
+    feedback for mpv alone and Aerith alike (`scripts/bench-window.sh`);
+  - Aerith about matches mpv alone in cadence, sync and power, on Umbriel and KWin, its tree 5 to
+    7 MiB larger; its picture differs by one step of 8-bit dithering, until the relay offers
+    colour management (M1.5);
+  - the cadence floor is not met under mpv's default audio sync at a fixed rate, in mpv alone as
+    in Aerith; display sync meets it there and defeats VRR;
+  - the owner's decisions: the video above a black root
+    ([ADR-0019](adr/0019-the-video-above-a-black-root.md)), to be confirmed in a uwui session;
+    display sync at a fixed rate and audio sync under VRR
+    ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)), built at M1.4c;
+  - M1.4a's open questions answered: ADR-0018 validated; `rustix` kept as a direct dependency of
+    the player; a minute of fuzzing in CI; the window thread's wake-ups kept until Stage 3;
+  - the closing review's findings fixed, or recorded below.
 
 ### M1.4c — Display sync by the display's rate
 
@@ -321,12 +272,24 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
   libwayland-client at run time, the player's included: the development shell sets
   `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
-- At 240 Hz on Umbriel, under audio sync, 3 % to 23 % of refresh gaps are off the ideal pattern,
-  in mpv alone as in Aerith: Umbriel offers no `wp_fifo_v1`, and mpv paces itself. It fails the
-  cadence floor, which mpv's own counters do not show.
-- The bench reads mpv alone's presentation from mpv's own feedback, which mpv asks for most
-  frames but not all: its gaps are measured between frames that both have it. The relay's count,
-  for Aerith, has every frame.
+- Under mpv's default audio sync at a fixed rate, a film whose rate is near a whole fraction of
+  the display's misses the cadence floor (23.976 and 59.94 fps at 240 Hz), in mpv alone as in
+  Aerith, with fifo or without. ADR-0021's rule mends it, built at M1.4c.
+- The bench reads mpv alone's presentation from mpv's own feedback: most frames without fifo, one
+  in two under it, so mpv alone's cadence is not measured on a compositor with fifo. The relay's
+  count, for Aerith, has every frame. Every M1.4b figure includes `WAYLAND_DEBUG=client`'s cost,
+  about 1 KB written a frame, not measured; each configuration was measured once.
+- The bench's frames compared are mpv's own drawing, again, at its window's size: they cannot show
+  what the compositor does to the plane (the relay's viewport, the opaque region).
+- Umbriel scans out the order above for most frames, not all (301 of 1,385 in one run); why is not
+  known.
+- A compositor that offers fractional scaling but never sends a subsurface's preferred scale would
+  leave mpv never told its outputs, and so the display's rate
+  ([`surface.rs`](../crates/aerith-player/src/relay/surface.rs), `fractional_scale_owed`). Umbriel,
+  KWin and the fake compositor all send it.
+- [ADR-0013](adr/0013-the-bench.md) says the bench measures Aerith through `aerith-player`; it
+  runs `aerith-testbed` instead and depends on no crate of Aerith's, and reads mpv's Wayland log.
+  The ADR is to be amended, on the owner's go.
 - Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
   bits, and mpv alone does not: their frames differ by one step of 8 bits.
 - The window's thread wakes 52 to 135 times a second while a film plays under audio sync, 280 to
@@ -354,6 +317,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - `scripts/check.sh` grew from 33 s to over three minutes: `scripts/test-check.sh` runs the whole
   test suite, `at_rest`'s 9 s included, in six of its copies. A lighter way for those copies is the
   owner's call ([figures](measurements.md#the-checks)).
+
+- This file holds about 3,400 words, over the 2,000 it aims at: the debt above is most of it.
 
 Finished stages move to `docs/history.md`, in a few lines each, so that this file holds the current
 stage only, under about 2,000 words.

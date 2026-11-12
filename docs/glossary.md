@@ -22,8 +22,16 @@ The terms Aerith coins or uses in a sense of its own.
 - **Order of the surfaces**: where the video plane lies in the window. *Below*: under the window's
   own surface, which is transparent over the video. *Above*: over the window's own surface, which
   holds an opaque black pixel (the *black root*), and under a surface of the interface's that holds
-  nothing while the controls are hidden, so that the compositor may show the video alone. M1.4b
-  measures both.
+  nothing while the controls are hidden, so that the compositor may show the video alone. Aerith
+  keeps the order above ([ADR-0019](adr/0019-the-video-above-a-black-root.md)).
+- **Refresh gap**: how many refreshes of the display a frame stayed on screen before the next one.
+- **Off cadence**: of a film's refresh gaps, those the ideal pattern, set by the display's rate
+  over the film's, does not hold ([`presentation.rs`](../crates/aerith-bench/src/presentation.rs)).
+- **Span**: under VRR, the time between two presented frames, against the frame periods between
+  them.
+- **Audio sync, display sync**: mpv timing each frame by the sound's clock, or by the display's
+  refreshes, resampling the sound to match
+  ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)).
 - **Bench**: the tool of Stage 1, `aerith-bench`, and its scripts, that play the corpus and measure
   the budgets ([ADR-0013](adr/0013-the-bench.md)).
 - **Corpus**: the clips the bench plays, each with its source and licence

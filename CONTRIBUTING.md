@@ -166,11 +166,13 @@ agent-headless --sway -- sh -c "swaymsg output HEADLESS-1 resolution 1280x720 &&
 ```
 
 `--order above` plays the other order; `--pause-after 2 --seconds 8` shows the window's thread and
-the relay's asleep while paused. KWin's virtual backend is a second compositor that runs there,
-with `wp_fifo_v1` and colour management, which the headless sway lacks: start
-`kwin_wayland --virtual --width 1280 --height 720 --socket kw-test` from KWin's store path (the
-one in `/run/wrappers` carries capabilities), then the testbed with `WAYLAND_DISPLAY=kw-test`. The headless output is 3840 × 2160, drawn by pixman: it shows a
+the relay's asleep while paused. The headless output is 3840 × 2160, drawn by pixman: it shows a
 few frames a second unless made smaller, as above. Figures there are not tier figures.
+
+KWin's virtual backend is a second compositor that runs there, with `wp_fifo_v1` and colour
+management, which the headless sway lacks. Start `kwin_wayland --virtual --width 1280 --height 720
+--socket kw-test` from KWin's store path, which `readlink -f` of the one on `PATH` gives (the one
+in `/run/wrappers` carries capabilities), then the testbed with `WAYLAND_DISPLAY=kw-test`.
 
 **On a desktop**, inside `nix develop`, with the pinned mpv and a clip of the corpus:
 
@@ -276,7 +278,7 @@ cargo run --release -p aerith-bench -- run mpv ~/.cache/aerith-bench/corpus/hdr1
 plays the clip for 60 seconds at most, fullscreen, and prints the path of its `result.json`, under
 `target/bench/`, beside the player's logs. `--stream` serves the clip over HTTP on 127.0.0.1 and
 plays it as a stream. `--idle N` reads the GPU's idle power for N seconds first (10 by default, 0
-to skip). `--mpv-option name=value` adds an option to mpv alone. `--display` is what you say of the
+to skip). `--mpv-option name=value` adds an option to mpv alone, or to Aerith's mpv. `--display` is what you say of the
 screen: the bench cannot read it. `aerith-bench table <result.json>...` prints the table that
 compares runs.
 
@@ -308,13 +310,14 @@ there, or `BENCH_MPV_OPTIONS=gpu-sw=yes` for the script. On the owner's desktop,
 `aerith` is a player of the bench too: `aerith-bench run aerith <clip>` runs `aerith-testbed` from
 `PATH`, fullscreen, which opens the clip itself and plays it through `aerith-player`. The bench
 gives the testbed a wrapper as its mpv: the same mpv as mpv alone, with the bench's IPC socket
-added, through which the bench reads mpv's counters without driving it. `--order below|above`
+added, through which the bench reads mpv's counters; it drives that mpv only to capture frames. `--order below|above`
 chooses the order of the surfaces, `--toggle-controls N` shows and hides the controls N times,
 and `--mpv-option` adds an option to that mpv. For mpv alone and Aerith, the bench reads the
 compositor's presentation feedback from mpv's Wayland messages (`WAYLAND_DEBUG=client`): the
 frames presented, those scanned out (`zero_copy`), and the refresh gaps between them against the
 ideal pattern the clip's rate and the display's give (`src/presentation.rs` says how gaps off
-cadence are counted). mpv asks for feedback on most frames, not all: a gap is measured only
+cadence are counted). mpv asks for feedback on most frames, not all, and on one in two under
+fifo: a gap is measured only
 between two frames that both have it. For Aerith, the relay's own count, with feedback on every
 frame, is in the result's `testbed.relay_presentation`. `aerith-bench presentation <log> [rate]`
 prints these figures for a log a run kept. `--frames 5,20,40` captures the frames at those times

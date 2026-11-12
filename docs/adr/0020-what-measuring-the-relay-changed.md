@@ -20,7 +20,7 @@ mpv's state reaches the plane through the relay's own requests. Measuring the pl
   (`video/out/vulkan/context_wayland.c`). The relay did not offer it, so on a compositor that has
   it (KWin 6.8), mpv inside Aerith would have paced worse than mpv alone. Under KWin, with fifo,
   a 25 fps film then kept its cadence at 240 Hz (0 to 2 gaps off of 1,500); without, on Umbriel,
-  51 to 75.
+  51 to 75. The two runs differ by their compositor too: no run withheld fifo on KWin.
 
 ## Decision
 
@@ -33,7 +33,8 @@ wrong picture. Nothing of mpv's region is issued as mpv sent it.
 **mpv is offered `wp_fifo_manager_v1` when the compositor offers it.** One fifo a surface, as the
 protocol says; a request on a fifo whose surface is gone ends mpv's connection, never the
 window's. mpv's barriers go with the commit they came with, issued on the plane's own fifo. The
-compositor ignores them while the plane is synchronized, as the protocol requires.
+compositor ignores the wait while the plane is synchronized, as the protocol requires; the barrier
+still applies.
 
 ## Alternatives considered
 

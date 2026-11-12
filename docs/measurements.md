@@ -438,7 +438,7 @@ and CPU are not figures. The cadence and the scanout are.
   ([above](#inside-the-testbed-on-the-desktop)): the load counts. mpv's own counters see none of it. It is mpv's own pacing: without fifo-v1, it
   commits each frame when due, and the refresh it lands on varies.
 - The relay's count, with feedback on every frame, and the figure read from mpv's own feedback
-  agree within a few points.
+  agree within a few points. The relay's count runs about 2 s longer, to the testbed's end.
 
 **The frames compared**, `--frames 5,20,40` on `sdr-2160p-hevc10-eac3` and on
 `cadence-23.976-1080p-h264-aac`, captured by mpv as it draws them in its window:
@@ -489,14 +489,18 @@ the clip's.
 | sdr-2160p | aerith, below | 232 of 1250 | 253 of 1318 | 0 of 1260 | 2.63 W | 4.0 % | 247.1 MiB | 0.72 |
 | sdr-2160p | aerith, above | 275 of 1262 | 285 of 1319 | 1260 of 1266 | 3.39 W | 3.9 % | 247.9 MiB | 0.78 |
 
+- **Sync holds under audio sync**: mpv's estimate stayed under 0.05 ms in every run, against the
+  ±20 ms floor.
 - **No player meets the cadence floor at 240 Hz under audio sync.** mpv alone has 3 % (25 fps) to
   23 % (59.94 fps) of its gaps off cadence, Aerith about the same in either order. mpv's own
   counters say 0 dropped and 0 delayed in every run. The gaps off are mostly one refresh short
   then one long (9 and 11 at film rate).
-- **The cause is the compositor's pacing protocol.** Umbriel offers neither `wp_fifo_v1` nor
-  `wp_commit_timing_v1` (none in its source, `d171ccb`). mpv 0.42 then presents in MAILBOX and
-  times each frame itself (`video/out/vulkan/context_wayland.c`, `use_fifo`). The relay offers no
-  fifo either: on a compositor that has it, mpv alone would use FIFO, and Aerith's mpv not.
+- **The first suspect was the compositor's pacing protocol.** Umbriel offers neither `wp_fifo_v1`
+  nor `wp_commit_timing_v1` (none in its source, `d171ccb`). mpv 0.42 then presents in MAILBOX
+  and times each frame itself (`video/out/vulkan/context_wayland.c`, `use_fifo`). The relay
+  offered no fifo either; it does since `e3d0612`. Measured later under KWin, which has fifo
+  ([below](#under-kwin-with-fifo)): fifo mends the cadence at 25 fps only; at 23.976 and
+  59.94 fps the cause is audio sync itself.
 - **The order above scans the video out**, but not always: 301 of 1385 frames at 24 fps and 1984
   of 3451 at 59.94; why Umbriel composited the others is not known.
 - **GPU power** differs by a watt or two from run to run, in no steady direction between the
@@ -578,6 +582,7 @@ was scanned out by KWin too (611 to 1,802 frames of every run); the order below 
 | cadence-59.94 | below | 840 of 3597 | 741 of 3597 | 0 of 1749 | 7.12 W |
 | cadence-59.94 | above | 430 of 3597 | 749 of 3595 | 1739 of 1739 | 6.01 W |
 
+- mpv's sync estimate stayed under 0.05 ms in every run.
 - **Fifo mends the cadence where the display's rate over the clip's is far from a whole number**:
   at 25 fps (9.6 refreshes a frame), 0 and 2 gaps off of 1,500, against 51 and 75 on Umbriel.
 - **It does not where that ratio is near a whole number**: 23.976 fps (10.011) and 59.94 fps
@@ -602,7 +607,10 @@ frames show between the fixed rate's refreshes.
 KWin still sends a refresh period of 4.17 ms and no refresh counter, so refresh gaps say nothing
 here. The bench's `timing` figure measures instead the time between two presented frames, `k`
 frames apart, against `k` frame periods ([`presentation.rs`](../crates/aerith-bench/src/presentation.rs));
-under fifo most spans are of two frames. Read with `aerith-bench presentation <log> <rate>`.
+under fifo most spans are of two frames. Read with `aerith-bench presentation <log> <rate>`, from
+whole logs, as this series predates the figure: Aerith's rows include about a second of each
+clip's start and two seconds after the bench's last reading, which mpv alone's rows leave out, a
+bias against Aerith. mpv's sync estimate stayed under 0.1 ms in every run.
 
 | Clip | Player | Spans off by more than half a refresh (2.1 ms) | More than one (4.2 ms) | Worst | Scanned out | GPU power over idle | Other programs, threads |
 |---|---|---|---|---|---|---|---|
@@ -650,54 +658,63 @@ Measured on 2026-11-12 from 08:46 to 09:31 CET on the owner's desktop under Umbr
 `owner-desktop`, by `BENCH_SECONDS=60 scripts/bench-window.sh ... cadence sync`: DP-3 with VRR up
 to 240.016 Hz, scale 1.5. A 10 s run of mpv alone checked VRR first: 8 % of its intervals a whole
 number of refreshes. Other sessions kept up to 15 hardware threads busy in some runs (last
-column); the owner chose to measure all the same. `window-20261112T074630Z`, kept outside the
-repository. "Whole" is the share of intervals a whole number of 240 Hz refreshes: near 100 % means
-the display ran at its fixed top rate.
+column); the owner chose to measure all the same. The figures are each run's `result.json`, over
+the bench's own window: from 2 s after the clip's first frame to the last reading.
+`window-20261112T074630Z`, kept outside the repository.
 
-| Clip | Player | Spans off by more than half a refresh | More than one | Worst | Frames a second | Delayed / mistimed (mpv) | Scanned out | GPU power over idle | Other programs, threads | Whole |
-|---|---|---|---|---|---|---|---|---|---|---|
-| cadence-23.976 | mpv alone | 377 of 1396 | 52 | 9.5 ms | 23.976 | 0.0 / – | 0 of 1372 | 3.17 W | 14.9 | 8% |
-| cadence-23.976 | aerith, below | 308 of 1419 | 52 | 18.3 ms | 23.976 | 0.0 / – | 0 of 1345 | 2.92 W | 12.16 | 11% |
-| cadence-23.976 | aerith, above | 62 of 1460 | 36 | 36.3 ms | 23.976 | 0.0 / – | 1160 of 1385 | 3.88 W | 3.14 | 10% |
-| cadence-24 | mpv alone | 2 of 1396 | 0 | 3.2 ms | 24.0 | 0.0 / – | 0 of 1389 | 3.26 W | 0.16 | 17% |
-| cadence-24 | aerith, below | 8 of 1463 | 1 | 4.3 ms | 24.0 | 0.0 / – | 0 of 1390 | 2.61 W | 0.1 | 11% |
-| cadence-24 | aerith, above | 46 of 1462 | 9 | 15.5 ms | 24.0 | 0.0 / – | 1383 of 1387 | 2.91 W | 2.95 | 8% |
-| cadence-25 | mpv alone | 41 of 1457 | 25 | 12.2 ms | 25.0 | 0.0 / – | 0 of 1445 | 3.57 W | 0.26 | 1% |
-| cadence-25 | aerith, below | 146 of 1510 | 19 | 11.6 ms | 25.0 | 0.0 / – | 0 of 1436 | 2.53 W | 8.95 | 4% |
-| cadence-25 | aerith, above | 80 of 1522 | 15 | 6.3 ms | 25.001 | 0.0 / – | 1442 of 1446 | 2.68 W | 10.35 | 2% |
-| cadence-29.97 | mpv alone | 172 of 1747 | 11 | 14.4 ms | 29.97 | 0.0 / – | 0 of 1733 | 3.04 W | 9.36 | 8% |
-| cadence-29.97 | aerith, below | 532 of 1751 | 144 | 19.8 ms | 29.959 | 0.0 / – | 0 of 1655 | 4.53 W | 14.22 | 11% |
-| cadence-29.97 | aerith, above | 92 of 1825 | 23 | 23.9 ms | 29.973 | 0.0 / – | 1730 of 1732 | 2.5 W | 5.43 | 6% |
-| cadence-50 | mpv alone | 171 of 2903 | 55 | 15.6 ms | 49.983 | 0.0 / – | 0 of 2891 | 5.25 W | 4.91 | 2% |
-| cadence-50 | aerith, below | 309 of 3037 | 79 | 15.6 ms | 50.001 | 0.0 / – | 0 of 2871 | 6.45 W | 7.81 | 5% |
-| cadence-50 | aerith, above | 388 of 3037 | 84 | 19.2 ms | 50.0 | 0.0 / – | 2588 of 2888 | 5.96 W | 5.33 | 5% |
-| cadence-59.94 | mpv alone | 237 of 3481 | 29 | 39.6 ms | 59.943 | 0.0 / – | 0 of 3465 | 6.0 W | 10.53 | 10% |
-| cadence-59.94 | aerith, below | 316 of 3619 | 57 | 9.3 ms | 59.941 | 0.0 / – | 0 of 3436 | 6.96 W | 6.04 | 6% |
-| cadence-59.94 | aerith, above | 170 of 3647 | 22 | 16.7 ms | 59.942 | 0.0 / – | 3462 of 3468 | 6.19 W | 5.4 | 5% |
-| cadence-60 | mpv alone | 110 of 3500 | 44 | 29.2 ms | 60.001 | 0.0 / – | 0 of 3468 | 7.09 W | 3.13 | 7% |
-| cadence-60 | aerith, below | 17 of 3658 | 6 | 20.7 ms | 59.999 | 0.0 / – | 0 of 3474 | 7.41 W | 2.07 | 7% |
-| cadence-60 | aerith, above | 140 of 3649 | 42 | 14.8 ms | 60.0 | 0.0 / – | 3452 of 3465 | 6.1 W | 3.74 | 4% |
-| sdr | mpv alone | 21 of 1276 | 5 | 10.6 ms | 23.976 | 0.0 / – | 0 of 1268 | 4.21 W | 2.53 | 8% |
-| sdr | aerith, below | 159 of 1307 | 58 | 20.0 ms | 23.974 | 0.0 / – | 0 of 1239 | 3.39 W | 5.07 | 8% |
-| sdr | aerith, above | 122 of 1321 | 54 | 42.9 ms | 23.976 | 0.0 / – | 402 of 1253 | 4.69 W | 5.14 | 7% |
-| cadence-23.976 | mpv alone, display sync | 13688 of 13688 | 13688 | 269.0 ms | 241.188 | 238.0 / 47.0 | 0 of 13657 | 11.67 W | 5.64 | 99% |
-| cadence-23.976 | aerith, below, display sync | 14434 of 14434 | 14434 | 154.3 ms | 252.438 | 572.0 / 140.0 | 0 of 13648 | 14.19 W | 5.79 | 99% |
-| cadence-23.976 | aerith, above, display sync | 14476 of 14476 | 14476 | 275.4 ms | 253.982 | 681.0 / 162.0 | 13701 of 13746 | 10.44 W | 6.68 | 100% |
-| cadence-25 | mpv alone, display sync | 13612 of 13612 | 13612 | 300.0 ms | 246.541 | 415.0 / 78.0 | 0 of 13560 | 13.85 W | 7.0 | 97% |
-| cadence-25 | aerith, below, display sync | 14480 of 14480 | 14480 | 147.5 ms | 247.564 | 423.0 / 94.0 | 0 of 13742 | 14.79 W | 5.25 | 98% |
-| cadence-25 | aerith, above, display sync | 14341 of 14341 | 14341 | 340.0 ms | 243.939 | 284.0 / 45.0 | 12220 of 13608 | 11.48 W | 8.7 | 99% |
-| cadence-59.94 | mpv alone, display sync | 13106 of 13113 | 13099 | 65.0 ms | 240.958 | 497.0 / 46.0 | 0 of 13038 | 14.79 W | 14.45 | 94% |
-| cadence-59.94 | aerith, below, display sync | 14267 of 14270 | 14265 | 98.5 ms | 239.604 | 204.0 / 49.0 | 0 of 13546 | 17.1 W | 5.19 | 98% |
-| cadence-59.94 | aerith, above, display sync | 14443 of 14447 | 14437 | 100.2 ms | 240.745 | 181.0 / 30.0 | 13665 of 13714 | 12.97 W | 6.68 | 99% |
+**Under audio sync:**
 
-- **Under audio sync, VRR keeps the cadence when the machine is quiet.** On `cadence-24`, with
-  other programs at 0.1 to 0.2 threads, 2 spans of 1,396 lay more than half a refresh off for mpv
-  alone and 8 of 1,463 for Aerith in the order below; 46 of 1,462 in the order above, beside 3
-  busy threads. Where other sessions kept 9 to 15 threads busy, every player lost 10 % to 30 % of
-  its spans. Load, not the relay, decides these figures.
-- **Display sync defeats VRR.** mpv presents at every refresh, so the display runs at its top rate
-  (94 % to 100 % of intervals whole), and the spans say nothing of the picture's cadence. mpv
-  itself counted 181 to 681 frames delayed and 30 to 162 mistimed a minute, against 0 under audio
-  sync, and the GPU drew 7 to 11 W more.
+| Clip | Player | Spans off by more than half a refresh | More than one | Worst | Sync, max / p99 (mpv's estimate) | Scanned out | GPU power over idle | Other programs, threads |
+|---|---|---|---|---|---|---|---|---|
+| cadence-23.976 | mpv alone | 372 of 1371 | 52 | 9.5 ms | 0.03 / 0.03 ms | 0 of 1372 | 3.17 W | 14.9 |
+| cadence-23.976 | aerith, below | 285 of 1344 | 46 | 18.3 ms | 0.04 / 0.04 ms | 0 of 1345 | 2.92 W | 12.16 |
+| cadence-23.976 | aerith, above | 54 of 1384 | 32 | 36.3 ms | 0.01 / 0.01 ms | 1160 of 1385 | 3.88 W | 3.14 |
+| cadence-24 | mpv alone | 2 of 1388 | 0 | 3.2 ms | 0.01 / 0.01 ms | 0 of 1389 | 3.26 W | 0.16 |
+| cadence-24 | aerith, below | 2 of 1389 | 1 | 4.3 ms | 0.01 / 0.01 ms | 0 of 1390 | 2.61 W | 0.1 |
+| cadence-24 | aerith, above | 39 of 1386 | 8 | 15.5 ms | 0.04 / 0.04 ms | 1383 of 1387 | 2.91 W | 2.95 |
+| cadence-25 | mpv alone | 41 of 1444 | 25 | 12.2 ms | 0.01 / 0.01 ms | 0 of 1445 | 3.57 W | 0.26 |
+| cadence-25 | aerith, below | 128 of 1435 | 16 | 11.6 ms | 0.03 / 0.03 ms | 0 of 1436 | 2.53 W | 8.95 |
+| cadence-25 | aerith, above | 69 of 1445 | 15 | 6.3 ms | 0.01 / 0.01 ms | 1442 of 1446 | 2.68 W | 10.35 |
+| cadence-29.97 | mpv alone | 170 of 1732 | 11 | 14.4 ms | 0.01 / 0.01 ms | 0 of 1733 | 3.04 W | 9.36 |
+| cadence-29.97 | aerith, below | 520 of 1654 | 141 | 19.8 ms | 0.02 / 0.02 ms | 0 of 1655 | 4.53 W | 14.22 |
+| cadence-29.97 | aerith, above | 76 of 1731 | 18 | 23.9 ms | 0.03 / 0.03 ms | 1730 of 1732 | 2.5 W | 5.43 |
+| cadence-50 | mpv alone | 171 of 2890 | 55 | 15.6 ms | 0.01 / 0.01 ms | 0 of 2891 | 5.25 W | 4.91 |
+| cadence-50 | aerith, below | 284 of 2870 | 76 | 15.6 ms | 0.01 / 0.01 ms | 0 of 2871 | 6.45 W | 7.81 |
+| cadence-50 | aerith, above | 380 of 2887 | 81 | 16.4 ms | 0.01 / 0.01 ms | 2588 of 2888 | 5.96 W | 5.33 |
+| cadence-59.94 | mpv alone | 234 of 3464 | 29 | 39.6 ms | 0.01 / 0.01 ms | 0 of 3465 | 6.0 W | 10.53 |
+| cadence-59.94 | aerith, below | 289 of 3435 | 54 | 9.3 ms | 0.01 / 0.01 ms | 0 of 3436 | 6.96 W | 6.04 |
+| cadence-59.94 | aerith, above | 160 of 3467 | 21 | 16.7 ms | 0.01 / 0.01 ms | 3462 of 3468 | 6.19 W | 5.4 |
+| cadence-60 | mpv alone | 102 of 3467 | 44 | 29.2 ms | 0.02 / 0.02 ms | 0 of 3468 | 7.09 W | 3.13 |
+| cadence-60 | aerith, below | 15 of 3473 | 6 | 20.7 ms | 0.01 / 0.01 ms | 0 of 3474 | 7.41 W | 2.07 |
+| cadence-60 | aerith, above | 138 of 3464 | 41 | 14.8 ms | 0.01 / 0.01 ms | 3452 of 3465 | 6.1 W | 3.74 |
+| sdr | mpv alone | 21 of 1267 | 5 | 10.6 ms | 0.01 / 0.01 ms | 0 of 1268 | 4.21 W | 2.53 |
+| sdr | aerith, below | 138 of 1238 | 46 | 20.0 ms | 0.03 / 0.03 ms | 0 of 1239 | 3.39 W | 5.07 |
+| sdr | aerith, above | 114 of 1252 | 54 | 42.9 ms | 0.01 / 0.01 ms | 402 of 1253 | 4.69 W | 5.14 |
+
+**Under display sync** (`video-sync=display-resample`). mpv presents at every refresh, so the
+spans say nothing of the picture's cadence; mpv's own counters do:
+
+| Clip | Player | Presents a second | Delayed / mistimed (mpv) | Sync, max (mpv's estimate) | Scanned out | GPU power over idle | Other programs, threads |
+|---|---|---|---|---|---|---|---|
+| cadence-23.976 | mpv alone | 241.188 | 238.0 / 47.0 | 25.73 ms | 0 of 13657 | 11.67 W | 5.64 |
+| cadence-23.976 | aerith, below | 252.438 | 572.0 / 140.0 | 28.45 ms | 0 of 13648 | 14.19 W | 5.79 |
+| cadence-23.976 | aerith, above | 253.982 | 681.0 / 162.0 | 28.45 ms | 13701 of 13746 | 10.44 W | 6.68 |
+| cadence-25 | mpv alone | 246.541 | 415.0 / 78.0 | 22.96 ms | 0 of 13560 | 13.85 W | 7.0 |
+| cadence-25 | aerith, below | 247.564 | 423.0 / 94.0 | 24.07 ms | 0 of 13742 | 14.79 W | 5.25 |
+| cadence-25 | aerith, above | 243.939 | 284.0 / 45.0 | 25.03 ms | 12220 of 13608 | 11.48 W | 8.7 |
+| cadence-59.94 | mpv alone | 240.958 | 497.0 / 46.0 | 18.65 ms | 0 of 13038 | 14.79 W | 14.45 |
+| cadence-59.94 | aerith, below | 239.604 | 204.0 / 49.0 | 19.85 ms | 0 of 13546 | 17.1 W | 5.19 |
+| cadence-59.94 | aerith, above | 240.745 | 181.0 / 30.0 | 17.5 ms | 13665 of 13714 | 12.97 W | 6.68 |
+
+- **Under audio sync, VRR keeps the cadence on a quiet machine, but not always.** On `cadence-24`,
+  with other programs at 0.1 to 0.2 threads, 2 spans of about 1,390 lay more than half a refresh
+  off, for mpv alone and for Aerith in the order below alike. On `cadence-25`, as quiet for mpv
+  alone (0.26 threads), 41 of 1,444. Where other sessions kept 9 to 15 threads busy, every player
+  lost 10 % to 30 % of its spans: load disturbs these figures most.
+- **Display sync defeats VRR.** mpv's presents at every refresh hold the display at its top rate:
+  94 % to 100 % of intervals whole, against 1 % to 17 % under audio sync. mpv counted 181 to 681
+  frames delayed and 30 to 162 mistimed a minute, against 0, its sync estimate reached 17.5 to
+  28.5 ms, past the ±20 ms floor in 6 of 9 runs, and the GPU drew 6.6 to 12.3 W more.
+- Under audio sync, mpv's sync estimate never passed 0.09 ms in any series of this milestone.
 - Umbriel scanned the order above out under VRR too, but not always: 402 of 1,253 frames of the
   4K clip.

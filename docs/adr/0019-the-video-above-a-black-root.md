@@ -20,16 +20,20 @@ Measured on 2026-11-12 on the owner's desktop at 240 Hz, on Umbriel (wlroots 0.2
 ([figures](../measurements.md#m14b--inside-the-window-measured)):
 
 - **Scanout.** Both compositors showed the video straight from mpv's buffer in the order above,
-  once the relay passed mpv's opaque region. In the order below, neither ever did: the window's
-  transparent surface lies over the video, and they scan out a single buffer.
+  once the relay passed mpv's opaque region: most frames of most runs, but on Umbriel only 301 of
+  1,385 at 24 fps, 1,984 of 3,451 at 59.94 fps and 402 of 1,253 for the 4K clip under VRR, for a
+  reason not known. In the order below, neither ever did: the window's transparent surface lies
+  over the video, and they scan out a single buffer.
 - **Power.** Under mpv's audio sync, the two orders were within a watt or two of each other and of
   mpv alone, in no steady direction. Under display sync, where mpv presents at every refresh, on
   Umbriel, the order above cost 1.6 to 3.9 W less than mpv alone, and 1.6 to 6.6 W less than the
   order below.
 - **Cadence.** On Umbriel the orders did about as well as each other. On KWin, the order above
   had fewer gaps off cadence (13 % against 18 % at 23.976 fps, 12 % against 23 % at 59.94 fps).
-- **The controls.** Shown and hidden 60 times, they added about 28 frames too short in the order
-  above, as the compositor stops scanning out while they show, and none in the order below. The
+- **The controls.** Shown and hidden 60 times, they added about 28 frames shown too short in the
+  order above, and about as many shown too long (29 of 12 to 15 refreshes, against 1 to 3 in runs
+  without the controls), as the compositor goes from scanout to composition and back; none in the
+  order below. The
   interface's own frames were never late in either.
 - **What the interface must do.** In the order above, it draws into a surface of its own above the
   plane, paced by that surface's frame callbacks, never into the window's root, which holds the
