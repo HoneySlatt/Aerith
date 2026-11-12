@@ -47,11 +47,13 @@ impl Sandbox {
         if let Some(owner_home) = std::env::var_os("HOME").map(PathBuf::from) {
             push(&mut arguments, "--bind", &self.home, &owner_home);
         }
-        for folder in &self.writable {
-            push(&mut arguments, "--bind", folder, folder);
-        }
+        // Read-only first: a later bind wins, so a writable folder inside a read-only one, such as
+        // a run's folder under the clip's, stays writable.
         for folder in &self.readable {
             push(&mut arguments, "--ro-bind", folder, folder);
+        }
+        for folder in &self.writable {
+            push(&mut arguments, "--bind", folder, folder);
         }
         for folder in &self.hidden {
             // bwrap mounts on a folder, not a link: NixOS's /etc folders are links into the store.
@@ -87,7 +89,7 @@ mod tests {
     fn sandbox(root: &Path) -> Sandbox {
         Sandbox {
             home: root.join("home"),
-            writable: vec![root.join("run")],
+            writable: vec![root.join("run"), root.join("corpus/run")],
             readable: vec![root.join("corpus")],
             hidden: vec![],
             own_processes: true,
@@ -98,14 +100,15 @@ mod tests {
     fn the_owners_home_and_the_sound_devices_are_out_of_reach() {
         let root =
             std::env::temp_dir().join(format!("aerith-bench-sandbox-{}", std::process::id()));
-        for folder in ["home", "run", "corpus"] {
+        for folder in ["home", "run", "corpus/run"] {
             fs::create_dir_all(root.join(folder)).unwrap();
         }
         fs::write(root.join("corpus/clip"), "clip\n").unwrap();
         let home = std::env::var("HOME").unwrap();
         let script = format!(
             "touch \"$HOME/.aerith-bench-sandbox-probe\" && ls -A /dev/snd 2>/dev/null | wc -l && \
-             cat {corpus}/clip && touch {run}/written && ! touch {corpus}/denied 2>/dev/null && echo $$",
+             cat {corpus}/clip && touch {run}/written && ! touch {corpus}/denied 2>/dev/null && \
+             touch {corpus}/run/written && echo $$",
             corpus = root.join("corpus").display(),
             run = root.join("run").display(),
         );
@@ -138,6 +141,10 @@ mod tests {
             "not the owner's"
         );
         assert!(root.join("run/written").exists());
+        assert!(
+            root.join("corpus/run/written").exists(),
+            "a writable folder inside a read-only one stays writable"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
