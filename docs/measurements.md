@@ -549,3 +549,40 @@ pause, and was taken again below.
   that frame, as it does after a load, where Aerith's mpv has it off (`--osc=no`). Without the
   bottom 15 % of the picture, where it lies, 62.2 and 62.9 dB. `scripts/bench-window.sh` now
   turns it off in the frames' runs.
+
+### Under KWin, with fifo
+
+Measured on 2026-11-12 on the owner's desktop in a Plasma session, through `owner-desktop`: DP-3
+at 240.02 Hz, scale 1.45, KWin 6.8, which offers `wp_fifo_v1`; the relay passes it to mpv
+(`e3d0612`), and mpv 0.42 then presents in FIFO. Baloo, KDE's file indexer, kept a fifth of a core
+busy. KWin sends 0 as every presentation's refresh counter: the gaps are counted by time
+(`752f18e`).
+
+**The full series** (`BENCH_SECONDS=60 scripts/bench-window.sh ... cadence`, 05:14 to 05:44 CET,
+`window-20261112T051424Z`) gave few figures: under fifo, mpv asks for feedback on one frame in
+two, so its own feedback leaves almost no pair of frames one after the other to measure (0 to 43
+gaps a run); the relay there predated the count by time. mpv alone's run on `cadence-23.976`
+played on DP-2, where the focus was. mpv reported 0 frames delayed in every run. The order above
+was scanned out by KWin too (611 to 1,802 frames of every run); the order below never.
+
+**Aerith again**, the relay counting by time, every frame (05:49 to 05:58 CET,
+`window-kwin-20261112T054906Z`), against the same clips on Umbriel
+([above](#the-series-at-240-hz)):
+
+| Clip | Order | Gaps off cadence, KWin with fifo | On Umbriel, without | Scanned out | GPU power over idle |
+|---|---|---|---|---|---|
+| cadence-23.976 | below | 256 of 1439 | 380 of 1439 | 0 of 709 | 2.51 W |
+| cadence-23.976 | above | 191 of 1438 | 449 of 1439 | 671 of 696 | 3.70 W |
+| cadence-25 | below | 0 of 1500 | 51 of 1500 | 0 of 725 | 3.16 W |
+| cadence-25 | above | 2 of 1500 | 75 of 1500 | 704 of 724 | 3.82 W |
+| cadence-59.94 | below | 840 of 3597 | 741 of 3597 | 0 of 1749 | 7.12 W |
+| cadence-59.94 | above | 430 of 3597 | 749 of 3595 | 1739 of 1739 | 6.01 W |
+
+- **Fifo mends the cadence where the display's rate over the clip's is far from a whole number**:
+  at 25 fps (9.6 refreshes a frame), 0 and 2 gaps off of 1,500, against 51 and 75 on Umbriel.
+- **It does not where that ratio is near a whole number**: 23.976 fps (10.011) and 59.94 fps
+  (4.004) still show a frame one refresh short and the next one long, 12 % to 23 % of gaps. mpv's
+  audio sync times each frame by the audio clock, and the frames due just at a refresh's edge fall
+  on either side of it. Display sync is what holds such a cadence.
+- The order above is scanned out by KWin as by Umbriel, and had fewer gaps off cadence here.
+- The run of mpv alone on DP-3 gave no gap: its feedback, one frame in two, leaves none to measure.
