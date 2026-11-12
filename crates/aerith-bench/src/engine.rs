@@ -176,8 +176,9 @@ impl Engine {
 
     /// Waits for the clip that the player opened by itself (Aerith's testbed opens its own) to
     /// show its first frame, and returns the time from mpv's `start-file` event to its
-    /// `playback-restart`. mpv opens the bench's socket at its start, before the player opens the
-    /// clip, so the bench sees both events.
+    /// `playback-restart`. mpv opens the bench's socket at its start; the testbed opens the clip a
+    /// second after the player starts (`aerith-testbed`'s `OPEN_DELAY`), and the bench tries the
+    /// socket every 100 ms, so it is connected before the first event.
     pub fn wait_started(&mut self) -> io::Result<Duration> {
         let Engine::Mpv(ipc) = self else {
             return Err(io::Error::other("only an mpv engine is observed"));

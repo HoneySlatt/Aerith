@@ -18,7 +18,7 @@
 //!   the clip, as Aerith would, and plays it through `aerith-player` in its plane. The bench names
 //!   the testbed's mpv: a wrapper of the bench's that runs the same mpv as mpv alone with the
 //!   bench's IPC socket and log added after the player's options, so that the bench reads that
-//!   mpv's counters as it reads mpv alone's, without driving it.
+//!   mpv's counters as it reads mpv alone's, driving it only to capture frames.
 //!
 //! mpv alone and Aerith's mpv log their Wayland messages (`WAYLAND_DEBUG=client`), from which
 //! [`crate::presentation`] reads what the compositor did with each frame.

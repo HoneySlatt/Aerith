@@ -104,8 +104,10 @@ for part in "${parts[@]}"; do
             ;;
         frames)
             for clip in sdr-2160p-hevc10-eac3.mkv cadence-23.976-1080p-h264-aac.mkv; do
-                measure mpv "$clip" 20 --idle 0 --frames 5,20,40 --mpv-option osc=no
-                measure aerith "$clip" 20 --idle 0 --frames 5,20,40 --mpv-option osc=no
+                # Aerith's testbed quits on its own clock, the run's length after its first frame:
+                # long enough for three exact seeks and captures on a slow machine.
+                measure mpv "$clip" 60 --idle 0 --frames 5,20,40 --mpv-option osc=no
+                measure aerith "$clip" 60 --idle 0 --frames 5,20,40 --mpv-option osc=no
             done
             ;;
     esac

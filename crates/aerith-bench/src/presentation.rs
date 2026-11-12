@@ -20,13 +20,19 @@
 //!
 //! - **refresh gaps**: how many refreshes a frame stayed on screen before the next, from the
 //!   refresh counter (`msc`), or from the time between them over the refresh period when the
-//!   compositor keeps no counter (KWin 6.8). The ideal gap is the display's rate over the frames' rate, `r`: a
-//!   film at 23.976 frames a second on a 240.016 Hz display has r = 10.0107, so each frame shows
+//!   compositor keeps no counter (KWin 6.8). The ideal gap is the display's rate over the
+//!   frames' rate, `r`: a film at 23.976 frames a second on a 240.016 Hz display has r = 10.0107, so each frame shows
 //!   10 refreshes and one in 93 shows 11. The gaps **off cadence** are those the ideal pattern
 //!   does not hold, counted on their histogram: of n gaps, the pattern has (1 − f) n of
 //!   ⌊r⌋ and f n of ⌈r⌉, f being r's fraction; every gap past those, and every gap of another
 //!   length, is off cadence. A frame shown 9 refreshes and the next 11, at r = 10.0107, are two
-//!   gaps off cadence. This holds at any fixed refresh rate, with or without display sync.
+//!   gaps off cadence. This holds at any fixed refresh rate under audio sync. Under display sync,
+//!   mpv presents the same picture at every refresh: every gap is one refresh and says nothing of
+//!   the picture's cadence, which mpv's own counters of delayed and mistimed frames tell instead.
+//! - **whole intervals**: the share of intervals between two frames presented one after the
+//!   other that lie within a twentieth of a refresh of a whole number of refreshes. 100 % at a
+//!   fixed rate; under VRR most are not, but display sync holds a VRR display at its top rate and
+//!   brings it back to 100 %.
 //! - **intervals**: the time between two frames presented one after the other.
 //! - **timing**: for variable refresh rates, where refreshes say nothing of the content's cadence,
 //!   the time between two frames presented, `k` frames apart, against `k` frame periods. Frames
@@ -232,7 +238,8 @@ pub fn figures(frames: &[Fate], settle: f64, frame_rate: Option<f64>) -> Value {
         .filter(|(refresh, rate)| *refresh > 0.0 && *rate > 0.0)
         .map(|(refresh, rate)| 1000.0 / refresh / rate);
     let span = match (shown.first(), shown.last()) {
-        (Some(first), Some(last)) => (last.at_ns - first.at_ns) as f64 / 1e9,
+        // Times that go back, in a spliced or malformed log, give a span of zero.
+        (Some(first), Some(last)) => last.at_ns.saturating_sub(first.at_ns) as f64 / 1e9,
         _ => 0.0,
     };
     // The frames committed from the first shown to the last, for the rate.
@@ -248,6 +255,7 @@ pub fn figures(frames: &[Fate], settle: f64, frame_rate: Option<f64>) -> Value {
         "zero_copy": shown.iter().filter(|frame| frame.flags & ZERO_COPY != 0).count(),
         "refresh_ms": refresh_ms.map(|ms| figures::round(ms, 4)),
         "refresh_gaps": gap_figures(&gaps, ideal),
+        "whole_intervals": refresh_ms.and_then(|refresh| whole_share(&intervals, refresh)),
         "intervals_ms": interval_figures(intervals),
         "timing": frame_rate.zip(refresh_ms).map_or(Value::Null, |(rate, refresh)| {
             timing_figures(frames, 1000.0 / rate, refresh)
@@ -312,6 +320,22 @@ fn timing_figures(frames: &[Fate], period_ms: f64, refresh_ms: f64) -> Value {
         "off_by_a_refresh": beyond(refresh_ms),
         "worst_ms": figures::round(errors.iter().copied().fold(0.0, f64::max), 1),
     })
+}
+
+/// The share, rounded to a hundredth, of `intervals` within a twentieth of a refresh of a whole
+/// number of refreshes of `refresh_ms`; `None` without intervals.
+fn whole_share(intervals: &[f64], refresh_ms: f64) -> Option<f64> {
+    if intervals.is_empty() || refresh_ms <= 0.0 {
+        return None;
+    }
+    let whole = intervals
+        .iter()
+        .filter(|interval| {
+            let refreshes = *interval / refresh_ms;
+            (refreshes - refreshes.round()).abs() < 0.05
+        })
+        .count();
+    Some(figures::round(whole as f64 / intervals.len() as f64, 2))
 }
 
 fn interval_figures(intervals: Vec<f64>) -> Value {
@@ -495,6 +519,32 @@ mod tests {
         assert_eq!(timing["off_by_half_a_refresh"], 2);
         assert_eq!(timing["off_by_a_refresh"], 2);
         assert_eq!(timing["worst_ms"], 6.3);
+    }
+
+    #[test]
+    fn times_that_go_back_give_no_negative_span_and_no_panic() {
+        let log = [
+            commit(Some(70)).join("\n"),
+            presented_line(70, 10_000, 0, 0),
+            commit(Some(71)).join("\n"),
+            presented_line(71, 13_000, 0, 0),
+            commit(Some(72)).join("\n"),
+            presented_line(72, 11_000, 0, 0),
+        ]
+        .join("\n");
+        let figures = figures(&parse(&log), 0.0, None);
+        assert_eq!(figures["presented"], 3);
+        assert_eq!(figures["seconds"], 1.0);
+    }
+
+    #[test]
+    fn whole_intervals_tell_a_fixed_rate_from_a_variable_one() {
+        // At 4.166388 ms a refresh: 42 ms is 10.08 refreshes, whole; 39.6 ms is 9.5, not.
+        assert_eq!(
+            whole_share(&[41.664, 41.664, 39.6, 37.5], 4.166388),
+            Some(0.75)
+        );
+        assert_eq!(whole_share(&[], 4.166388), None);
     }
 
     #[test]
