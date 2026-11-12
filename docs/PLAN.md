@@ -212,11 +212,15 @@ Aerith's window under a test interface, measured against the rivals. Planned by
     ([figures](measurements.md#with-vrr-under-kwin)): 4 % to 19 % of Aerith's frames show more
     than half a refresh early or late, mpv alone's 6 % to 33 %: no player keeps an even cadence
     under audio sync. To take again quiet; display sync under VRR not measured.
+  - With VRR, under Umbriel ([figures](measurements.md#with-vrr-under-umbriel)): under audio
+    sync, VRR keeps the cadence on a quiet machine (2 to 8 spans off of about 1,400 on 24 fps);
+    load breaks it in every player. Display sync defeats VRR: mpv presents at every refresh, 181
+    to 681 frames delayed a minute, 7 to 11 W more.
   - The order of the surfaces decided on 2026-11-12: the video above a black root
     ([ADR-0019](adr/0019-the-video-above-a-black-root.md)), to be confirmed in a uwui session.
     What measuring changed in the relay: [ADR-0020](adr/0020-what-measuring-the-relay-changed.md).
   - Stopped on 2026-11-12 by the owner's choice. Left, in order, each on the owner's screen and go:
-    1. VRR again on a quiet machine, under audio sync and display sync;
+    1. VRR on a quiet machine, under audio sync, if the owner wants figures without load;
     2. the floor's 30 minutes, the owner's call;
     3. the rule of display sync, an ADR: the owner decides it with the 60 Hz and VRR figures;
     4. the closing review.
