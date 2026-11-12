@@ -27,8 +27,11 @@
 //!   ⌊r⌋ and f n of ⌈r⌉, f being r's fraction; every gap past those, and every gap of another
 //!   length, is off cadence. A frame shown 9 refreshes and the next 11, at r = 10.0107, are two
 //!   gaps off cadence. This holds at any fixed refresh rate, with or without display sync.
-//! - **intervals**: the time between two frames presented, for variable refresh rates, where the
-//!   refresh counter says nothing of the content's cadence.
+//! - **intervals**: the time between two frames presented one after the other.
+//! - **timing**: for variable refresh rates, where refreshes say nothing of the content's cadence,
+//!   the time between two frames presented, `k` frames apart, against `k` frame periods. Frames
+//!   without feedback lie between, so most spans are of two frames under fifo. A span off by more
+//!   than half a refresh of the display's fastest rate showed a frame too early or too late.
 //! - **zero copy**: the frames the compositor scanned out straight from mpv's buffer.
 
 use std::collections::{BTreeMap, HashMap};
@@ -246,6 +249,9 @@ pub fn figures(frames: &[Fate], settle: f64, frame_rate: Option<f64>) -> Value {
         "refresh_ms": refresh_ms.map(|ms| figures::round(ms, 4)),
         "refresh_gaps": gap_figures(&gaps, ideal),
         "intervals_ms": interval_figures(intervals),
+        "timing": frame_rate.zip(refresh_ms).map_or(Value::Null, |(rate, refresh)| {
+            timing_figures(frames, 1000.0 / rate, refresh)
+        }),
     })
 }
 
@@ -274,6 +280,37 @@ pub fn gap_figures(counts: &BTreeMap<u64, u64>, ideal: Option<f64>) -> Value {
         "ideal": figures::round(ideal, 4),
         "counts": counts.iter().map(|(gap, count)| (gap.to_string(), json!(count))).collect::<serde_json::Map<_, _>>(),
         "off_cadence": (n - on_cadence).round() as u64,
+    })
+}
+
+/// How far the time between presented frames lies from their frame periods (`period_ms`), against
+/// half a refresh and a whole one (`refresh_ms`): see the module's documentation.
+fn timing_figures(frames: &[Fate], period_ms: f64, refresh_ms: f64) -> Value {
+    let presented: Vec<(usize, u128)> = frames
+        .iter()
+        .enumerate()
+        .filter_map(|(index, fate)| match fate {
+            Fate::Presented(presented) => Some((index, presented.at_ns)),
+            _ => None,
+        })
+        .collect();
+    let errors: Vec<f64> = presented
+        .windows(2)
+        .map(|pair| {
+            let ((first, at), (second, later)) = (pair[0], pair[1]);
+            let span = later.saturating_sub(at) as f64 / 1e6;
+            (span - (second - first) as f64 * period_ms).abs()
+        })
+        .collect();
+    if errors.is_empty() {
+        return Value::Null;
+    }
+    let beyond = |limit: f64| errors.iter().filter(|error| **error > limit).count();
+    json!({
+        "spans": errors.len(),
+        "off_by_half_a_refresh": beyond(refresh_ms / 2.0),
+        "off_by_a_refresh": beyond(refresh_ms),
+        "worst_ms": figures::round(errors.iter().copied().fold(0.0, f64::max), 1),
     })
 }
 
@@ -438,6 +475,26 @@ mod tests {
         let figures = figures(&parse(&log_of(&[0, 0, 0], 0)), 0.0, None);
         assert_eq!(figures["refresh_gaps"]["counts"], json!({"10": 2}));
         assert_eq!(figures["presented"], 3);
+    }
+
+    #[test]
+    fn spans_off_their_frame_periods_are_counted() {
+        // Frames 41.708 ms apart at 23.976 fps, one of them 6 ms late; the second has no
+        // feedback, so the first span is of two frames.
+        let mut lines = commit(Some(70));
+        lines.push(presented_line(70, 1000, 0, 0));
+        lines.extend(commit(None));
+        for (index, ms) in [1083, 1131, 1167].into_iter().enumerate() {
+            let id = 71 + index as u32;
+            lines.extend(commit(Some(id)));
+            lines.push(presented_line(id, ms, 0, 0));
+        }
+        let timing = &figures(&parse(&lines.join("\n")), 0.0, Some(24000.0 / 1001.0))["timing"];
+        assert_eq!(timing["spans"], 3);
+        // 1083 − 1000 = 83 of 83.4 ms; 1131 − 1083 = 48 of 41.7, 6.3 late; 1167 − 1131 = 36, 5.7 early.
+        assert_eq!(timing["off_by_half_a_refresh"], 2);
+        assert_eq!(timing["off_by_a_refresh"], 2);
+        assert_eq!(timing["worst_ms"], 6.3);
     }
 
     #[test]
