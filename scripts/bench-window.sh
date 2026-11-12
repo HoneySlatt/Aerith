@@ -18,7 +18,8 @@
 #   sync     display sync (video-sync=display-resample) on the 23.976, 25 and 59.94 clips: mpv
 #            alone, then Aerith in each order;
 #   frames   three frames of the SDR 4K clip and of the 23.976 clip, captured by mpv alone and by
-#            Aerith's mpv, and compared (PSNR; "inf" is the same picture).
+#            Aerith's mpv, and compared (PSNR; "inf" is the same picture). mpv alone's on-screen
+#            controller is turned off, as Aerith's is: it shows over the first frame after a load.
 # BENCH_SECONDS sets the length of each playing run (120 by default). With it at 120, the parts
 # take about 55, 5, 20 and 3 minutes.
 # BENCH_MPV_OPTIONS adds options to every mpv, alone and Aerith's, as `name=value` separated by
@@ -103,8 +104,8 @@ for part in "${parts[@]}"; do
             ;;
         frames)
             for clip in sdr-2160p-hevc10-eac3.mkv cadence-23.976-1080p-h264-aac.mkv; do
-                measure mpv "$clip" 20 --idle 0 --frames 5,20,40
-                measure aerith "$clip" 20 --idle 0 --frames 5,20,40
+                measure mpv "$clip" 20 --idle 0 --frames 5,20,40 --mpv-option osc=no
+                measure aerith "$clip" 20 --idle 0 --frames 5,20,40 --mpv-option osc=no
             done
             ;;
     esac
