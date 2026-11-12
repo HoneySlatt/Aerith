@@ -222,6 +222,10 @@ pub(super) struct PlaneState {
     issued: Issued,
     /// The number of the last change of the interface's that waits for its commit.
     change: u64,
+    /// Whether mpv's surface is yet to be told the outputs the plane is on, and whether it
+    /// committed since it became the plane's ([`State::plane_assigned`]).
+    enters_held: bool,
+    committed_since_assigned: bool,
 }
 
 /// What the relay last issued on the plane's surface: the state the compositor holds for it.
@@ -259,6 +263,8 @@ impl Default for PlaneState {
                 opaque: false,
             },
             change: 0,
+            enters_held: false,
+            committed_since_assigned: false,
         }
     }
 }
@@ -466,6 +472,8 @@ impl State {
             self.maybe_release(&old);
         }
         if is_plane {
+            self.plane.committed_since_assigned = true;
+            self.release_enters();
             if attaches {
                 self.presentation.committed += 1;
             }
@@ -821,26 +829,51 @@ impl State {
         }
     }
 
-    /// mpv's surface became the plane's: it is told the outputs, and the scales, the plane's
-    /// surface is on.
+    /// mpv's surface became the plane's: it is told the scales the plane's surface has, and the
+    /// outputs it is on once mpv committed it and was told its fractional scale, as a compositor
+    /// tells a surface its outputs once it holds content. In that order: mpv 0.42 rescales its
+    /// window by its old scale over the new when its surface enters an output, and told the
+    /// output first, divides by a scale of zero and asks for a viewport of 0x0. mpv makes its
+    /// toplevel before its fractional scale object, and the compositor may send the plane's scale
+    /// late (KWin does).
     pub(super) fn plane_assigned(&mut self) {
-        for output in self.host.entered.clone() {
-            self.plane_entered(&output);
-        }
+        self.plane.enters_held = true;
+        self.plane.committed_since_assigned = false;
         self.send_preferred_buffer_scale();
         self.send_preferred_buffer_transform();
         self.send_preferred_scale();
     }
 
+    /// Tells mpv's plane surface the outputs the plane is on, if they were held and nothing holds
+    /// them any more.
+    fn release_enters(&mut self) {
+        if !self.plane.enters_held
+            || !self.plane.committed_since_assigned
+            || self.fractional_scale_owed()
+        {
+            return;
+        }
+        self.plane.enters_held = false;
+        for output in self.host.entered.clone() {
+            self.plane_entered(&output);
+        }
+    }
+
     /// The plane's surface entered `output`: so does mpv's.
-    pub(super) fn plane_entered(&self, output: &HostOutput) {
+    pub(super) fn plane_entered(&mut self, output: &HostOutput) {
+        if self.plane.enters_held {
+            return;
+        }
         for (surface, mpv_output) in self.plane_and_mpv_outputs(output) {
             surface.enter(&mpv_output);
         }
     }
 
-    /// The plane's surface left `output`: so does mpv's.
+    /// The plane's surface left `output`: so does mpv's, unless it was not told it entered.
     pub(super) fn plane_left(&self, output: &HostOutput) {
+        if self.plane.enters_held {
+            return;
+        }
         for (surface, mpv_output) in self.plane_and_mpv_outputs(output) {
             surface.leave(&mpv_output);
         }
@@ -888,7 +921,7 @@ impl State {
     }
 
     /// Tells mpv's fractional scale objects for its plane surface the scale the compositor prefers.
-    pub(super) fn send_preferred_scale(&self) {
+    pub(super) fn send_preferred_scale(&mut self) {
         let (Some(plane), Some(scale)) = (&self.plane.surface, self.host.preferred_scale) else {
             return;
         };
@@ -897,6 +930,20 @@ impl State {
                 object.preferred_scale(scale);
             }
         }
+        self.release_enters();
+    }
+
+    /// Whether mpv's plane surface has a fractional scale object that has not been told a scale
+    /// yet: the compositor has not sent the plane's.
+    fn fractional_scale_owed(&self) -> bool {
+        let Some(plane) = &self.plane.surface else {
+            return false;
+        };
+        self.host.preferred_scale.is_none()
+            && self
+                .fractional_scales
+                .iter()
+                .any(|(_, surface)| surface == plane)
     }
 
     fn plane_surface(&self) -> Option<&WlSurface> {

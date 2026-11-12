@@ -81,6 +81,8 @@ struct Received {
     /// Globals the relay removed.
     globals_removed: u32,
     entered: u32,
+    /// The surface's enter and scale events, by name, in order.
+    surface_events: Vec<&'static str>,
     /// The toplevel, once configured.
     toplevel: Option<XdgToplevel>,
     /// The toplevel's `xdg_surface`, once configured.
@@ -1144,6 +1146,68 @@ fn mpvs_surface_is_told_the_planes_scale() {
     drop(host);
 }
 
+#[test]
+fn mpvs_surface_is_told_its_output_once_the_compositor_said_the_scale() {
+    let host = FakeHost::start();
+    host.with(|recorded| recorded.fractional_scale_later = true);
+    let mut interface = host.connect(true);
+    let (plane, mut mpv, _failures) = relay(&interface);
+    plane.place(10, 20, 320, 180).unwrap();
+    plane.show();
+    interface.commit();
+    let _output: WlOutput = mpv.bind(4);
+    let compositor: WlCompositor = mpv.bind(6);
+    let shell: XdgWmBase = mpv.bind(6);
+    let fractional: WpFractionalScaleManagerV1 = mpv.bind(1);
+    let surface = compositor.create_surface(&mpv.qh, ());
+    let _scale = fractional.get_fractional_scale(&surface, &mpv.qh, ());
+    let xdg_surface = shell.get_xdg_surface(&surface, &mpv.qh, ());
+    let _toplevel = xdg_surface.get_toplevel(&mpv.qh, ());
+    surface.commit();
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    mpv.roundtrip().unwrap();
+    assert_eq!(mpv.received.entered, 0, "no output before the scale");
+    host.with(|recorded| {
+        for object in &recorded.fractional_scales {
+            object.preferred_scale(180);
+        }
+    });
+    mpv.wait("its surface's output", |received| received.entered > 0);
+    let events = &mpv.received.surface_events;
+    let scale = events.iter().position(|event| *event == "preferred_scale");
+    let enter = events.iter().position(|event| *event == "enter");
+    assert!(scale.is_some() && scale < enter, "{events:?}");
+    assert_eq!(mpv.received.entered, 1, "told once");
+}
+
+#[test]
+fn mpvs_surface_is_told_its_scale_before_its_output() {
+    // mpv 0.42 rescales its window by the old scale over the new when its surface enters an
+    // output: told the output first, it divides by a scale of zero and asks for a viewport of 0x0.
+    let host = FakeHost::start();
+    let interface = host.connect(true);
+    let (plane, mut mpv, _failures) = relay(&interface);
+    plane.place(10, 20, 320, 180).unwrap();
+    plane.show();
+    interface.commit();
+    let _output: WlOutput = mpv.bind(4);
+    let compositor: WlCompositor = mpv.bind(6);
+    let shell: XdgWmBase = mpv.bind(6);
+    let fractional: WpFractionalScaleManagerV1 = mpv.bind(1);
+    // In mpv's order: the toplevel, then the fractional scale, then the first commit.
+    let surface = compositor.create_surface(&mpv.qh, ());
+    let xdg_surface = shell.get_xdg_surface(&surface, &mpv.qh, ());
+    let _toplevel = xdg_surface.get_toplevel(&mpv.qh, ());
+    let _scale = fractional.get_fractional_scale(&surface, &mpv.qh, ());
+    surface.commit();
+    mpv.wait("its surface's output", |received| received.entered > 0);
+    let events = &mpv.received.surface_events;
+    let scale = events.iter().position(|event| *event == "preferred_scale");
+    let enter = events.iter().position(|event| *event == "enter");
+    assert!(scale.is_some() && scale < enter, "{events:?}");
+}
+
 /// mpv's frame of 64x48 on the shown plane, as the compositor holds it.
 fn drawn(
     host: &FakeHost,
@@ -1840,8 +1904,16 @@ impl Dispatch<WlSurface, ()> for Received {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wayland_client::protocol::wl_surface::Event::Enter { .. } = event {
-            received.entered += 1;
+        use wayland_client::protocol::wl_surface::Event;
+        match event {
+            Event::Enter { .. } => {
+                received.entered += 1;
+                received.surface_events.push("enter");
+            }
+            Event::PreferredBufferScale { .. } => {
+                received.surface_events.push("preferred_buffer_scale");
+            }
+            _ => {}
         }
     }
 }
@@ -2041,6 +2113,7 @@ impl Dispatch<WpFractionalScaleV1, ()> for Received {
     ) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
             received.preferred_scale = Some(scale);
+            received.surface_events.push("preferred_scale");
         }
     }
 }

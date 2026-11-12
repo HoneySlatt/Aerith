@@ -107,6 +107,10 @@ pub struct Recorded {
     outputs: Vec<WlOutput>,
     /// mpv's surfaces' content types, as the relay set them.
     pub content_types: Vec<u32>,
+    /// Whether a fractional scale object is told its scale only when a test sends it, through
+    /// `fractional_scales`, rather than at once.
+    pub fractional_scale_later: bool,
+    pub fractional_scales: Vec<WpFractionalScaleV1>,
 }
 
 /// One surface, as its client set it.
@@ -575,8 +579,8 @@ impl GlobalDispatch<WlShm, ()> for HostState {
 impl GlobalDispatch<WlOutput, ()> for HostState {
     fn bind(
         state: &mut Self,
-        _: &DisplayHandle,
-        _: &Client,
+        handle: &DisplayHandle,
+        client: &Client,
         resource: New<WlOutput>,
         _: &(),
         data_init: &mut DataInit<'_, Self>,
@@ -604,6 +608,21 @@ impl GlobalDispatch<WlOutput, ()> for HostState {
             output.description("The fake compositor's output".to_owned());
         }
         output.done();
+        // As KWin does, the client's surfaces already committed are on this output, shown or not.
+        let committed: Vec<ObjectId> = state
+            .recorded()
+            .surfaces
+            .iter()
+            .filter(|surface| surface.commits > 0 && !surface.destroyed)
+            .map(|surface| surface.id.clone())
+            .collect();
+        for id in committed {
+            if let Ok(surface) = WlSurface::from_id(handle, id)
+                && surface.client().as_ref() == Some(client)
+            {
+                surface.enter(&output);
+            }
+        }
         state.recorded().outputs.push(output);
     }
 }
@@ -1362,7 +1381,7 @@ impl Dispatch<WlOutput, ()> for HostState {
 
 impl Dispatch<WpFractionalScaleManagerV1, ()> for HostState {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &Client,
         _: &WpFractionalScaleManagerV1,
         request: wp_fractional_scale_manager_v1::Request,
@@ -1371,8 +1390,13 @@ impl Dispatch<WpFractionalScaleManagerV1, ()> for HostState {
         data_init: &mut DataInit<'_, Self>,
     ) {
         if let wp_fractional_scale_manager_v1::Request::GetFractionalScale { id, .. } = request {
-            // 1.5, in 120ths.
-            data_init.init(id, ()).preferred_scale(180);
+            let object = data_init.init(id, ());
+            let mut recorded = state.recorded();
+            if !recorded.fractional_scale_later {
+                // 1.5, in 120ths.
+                object.preferred_scale(180);
+            }
+            recorded.fractional_scales.push(object);
         }
     }
 }
