@@ -639,3 +639,7 @@ under fifo most spans are of two frames. Read with `aerith-bench presentation <l
   order below.
 - The figures are under another session's load, which disturbs timing: to take again on a quiet
   machine before they count against the floor.
+
+Umbriel's configuration asks for VRR on DP-3 ("always"), yet every Umbriel run of this milestone
+presented its frames a whole number of 240.016 Hz refreshes apart, as at a fixed rate: Umbriel did
+not drive the display variably there. Why is not known.

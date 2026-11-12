@@ -168,10 +168,13 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   - The two orders of the surfaces, the video above a black root with the interface above it, or
     under a transparent root: GPU power against mpv alone, whether Umbriel scans the video out,
     hitches over 60 toggles of the controls. The owner decides with these and a uwui session.
-  - Display sync, mpv's default audio sync against `display-resample`, at 240 and 60 Hz, on 23.976,
-    25 and 59.94 fps: presents a second, corrections, power. The owner decides the rule with these.
-- **Done when.** The corpus's SDR clips meet the cadence and sync floors at 60 Hz, 240 Hz and VRR
-  on the high tier, inside the window; the two decisions are ADRs.
+  - Display sync, mpv's default audio sync against `display-resample`, at 240 Hz and with VRR, on
+    23.976, 25 and 59.94 fps: presents a second, corrections, power. The owner decides the rule
+    with these.
+- **Done when.** The corpus's SDR clips meet the cadence and sync floors at 240 Hz and VRR on the
+  high tier, inside the window; the two decisions are ADRs. 60 Hz moved to M1.5, on the lowest
+  laptop, by the owner's choice of 2026-11-12: the desktop's mode comes from its NixOS
+  configuration, which Umbriel cannot change while it runs.
 - **How to test.** The bench, on the owner's display.
 - **Measured.** Cadence, sync, power and memory against mpv alone.
 - **By hand.** The owner watches the clips, and switches the monitor to 60 Hz and to VRR.
@@ -213,8 +216,7 @@ Aerith's window under a test interface, measured against the rivals. Planned by
     ([ADR-0019](adr/0019-the-video-above-a-black-root.md)), to be confirmed in a uwui session.
     What measuring changed in the relay: [ADR-0020](adr/0020-what-measuring-the-relay-changed.md).
   - Stopped on 2026-11-12 by the owner's choice. Left, in order, each on the owner's screen and go:
-    1. 60 Hz, which the owner sets: `scripts/bench-window.sh` there; VRR again on a quiet machine,
-       with display sync too;
+    1. VRR again on a quiet machine, under audio sync and display sync;
     2. the floor's 30 minutes, the owner's call;
     3. the rule of display sync, an ADR: the owner decides it with the 60 Hz and VRR figures;
     4. the closing review.
@@ -227,7 +229,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **Goal.** HDR and Dolby Vision clips reach the owner's monitor as mpv alone shows them; audio
   passes through intact.
 - **Delivers.** The colour description carried to the subsurface; the SDR interface over HDR video;
-  passthrough checked by capturing what the audio output receives; the lowest laptop measured.
+  passthrough checked by capturing what the audio output receives; the lowest laptop measured,
+  cadence and display sync at 60 Hz there included (from M1.4b).
 - **Done when.** Every floor of the bench holds on both tiers on Linux.
 - **How to test.** The bench; the bitstream comparison script.
 - **Measured.** All of Stage 1's budgets on Linux.
