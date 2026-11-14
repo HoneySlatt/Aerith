@@ -30,8 +30,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)) and split in two by the owner. M1.4a
   done on 2026-11-12 ([ADR-0018](adr/0018-what-building-the-relay-changed.md)). M1.4b done on
   2026-11-12 ([ADR-0019](adr/0019-the-video-above-a-black-root.md) to
-  [ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). Next: M1.4c, on the
-  owner's go.
+  [ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). M1.4c under way:
+  the rule built and tested ([ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md),
+  [ADR-0023](adr/0023-the-bench-measures-aerith-through-its-test-window.md)); its measure on the
+  owner's desktop waits for a quiet machine.
 
 ## Status
 
@@ -42,7 +44,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.3](#m13--mpv-driven-through-aerith-player) | Aerith plays a file through mpv in its own process | Done |
 | [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | Done |
 | [M1.4b](#m14b--inside-the-window-measured) | The floors measured inside the window; the plane's order and display sync decided | Done |
-| [M1.4c](#m14c--display-sync-by-the-displays-rate) | The cadence floor holds inside the window, display sync chosen by the display's rate | Planned |
+| [M1.4c](#m14c--display-sync-by-the-displays-rate) | The cadence floor holds inside the window, display sync chosen by the display's rate | In progress |
 | [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
 
@@ -196,6 +198,18 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - **Measured.** Cadence, sync, power and wake-ups against mpv alone under each sync; how long the
   detection takes; the floor's 30 minutes, if the owner wants them.
 - **By hand.** The owner turns VRR on and off.
+- **Where it stands** (2026-11-14). Built, tested and checked
+  ([ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md)): the relay's
+  probe (`src/relay/rate.rs`), its thresholds set from M1.4b's logs
+  ([figures](measurements.md#the-detection-calibrated-on-m14bs-logs)); the engine thread
+  switching `video-sync`; tests against the fake compositor at whole refreshes, between them, and
+  with VRR turning on at fullscreen; the bench reading mpv's `display-sync-active`, and its `rule`
+  part. Run under KWin's virtual backend: a fixed rate told in about 1.3 s, then display sync. The
+  owner's go of 2026-11-14 amended ADR-0013 by
+  [ADR-0023](adr/0023-the-bench-measures-aerith-through-its-test-window.md). Left: on a quiet
+  machine, by the owner's choice of 2026-11-14, `BENCH_SECONDS=60 scripts/bench-window.sh
+  <corpus> "<display>" rule` at 240 Hz (about 30 min), then under VRR (about 30 min); the floor's
+  30 minutes, if the owner wants them; the closing review.
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
@@ -289,9 +303,6 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   leave mpv never told its outputs, and so the display's rate
   ([`surface.rs`](../crates/aerith-player/src/relay/surface.rs), `fractional_scale_owed`). Umbriel,
   KWin and the fake compositor all send it.
-- [ADR-0013](adr/0013-the-bench.md) says the bench measures Aerith through `aerith-player`; it
-  runs `aerith-testbed` instead and depends on no crate of Aerith's, and reads mpv's Wayland log.
-  The ADR is to be amended, on the owner's go.
 - Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
   bits, and mpv alone does not: their frames differ by one step of 8 bits.
 - The window's thread wakes 52 to 135 times a second while a film plays under audio sync, 280 to

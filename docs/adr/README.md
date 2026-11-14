@@ -21,7 +21,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0010](0010-the-logo.md) | The logo | Accepted; amends 0002 |
 | [0011](0011-a-pinned-stable-toolchain.md) | A pinned stable toolchain; a nightly only for the checks that need one | Accepted |
 | [0012](0012-the-test-corpus.md) | The test corpus: generated, with a few clips fetched | Accepted |
-| [0013](0013-the-bench.md) | The bench: a Rust tool that drives each rival's engine, in silence | Accepted |
+| [0013](0013-the-bench.md) | The bench: a Rust tool that drives each rival's engine, in silence | Accepted; amended by 0023 |
 | [0014](0014-the-player-interface-and-mpvs-connection.md) | The player's interface: commands and numbered events; mpv over its standard input | Accepted; amended by 0016 |
 | [0015](0015-a-relay-for-mpvs-wayland-surface.md) | mpv's picture through a relay on the interface's own Wayland connection | Accepted; amended by 0018 and 0020 |
 | [0016](0016-the-clock-carries-the-engines-rate.md) | The clock carries the engine's rate, and is read again every 10 s | Accepted; amends 0014 |
@@ -31,3 +31,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0020](0020-what-measuring-the-relay-changed.md) | What measuring the relay changed: mpv's opaque region and the compositor's fifo | Accepted; amends 0015 |
 | [0021](0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md) | Display sync at a fixed refresh rate, audio sync under VRR | Accepted |
 | [0022](0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md) | The relay tells the display's rate when the player asks: 24 intervals, 50 µs | Accepted |
+| [0023](0023-the-bench-measures-aerith-through-its-test-window.md) | The bench measures Aerith through its test window, as it measures a rival | Accepted; amends 0013 |

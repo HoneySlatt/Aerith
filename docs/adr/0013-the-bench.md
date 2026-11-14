@@ -1,6 +1,6 @@
 # 0013. The bench: a Rust tool that drives each rival's engine, in silence
 
-- Status: Accepted
+- Status: Accepted; amended by 0023 (how the bench measures Aerith)
 - Date: 2026-11-11
 
 ## Context
