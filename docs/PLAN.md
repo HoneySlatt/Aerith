@@ -212,7 +212,7 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   - on the quiet runs, the floors hold: at 240 Hz, 0 frames delayed and sync within 2.85 ms at
     23.976 fps, better than mpv alone under display sync; under VRR, 0.2 % to 2.4 % of spans off
     and sync within 0.03 ms at 24 to 50 fps, a little behind mpv alone at 25 and 50 fps. Under
-    load, Aerith and mpv alone alike delay frames, and display sync's sync reaches 15 to 26 ms;
+    load, Aerith and mpv alone alike delay frames, and display sync's sync reaches up to 26 ms;
   - the bench reads mpv's `display-sync-active`; its `rule` part measures the rule; by the owner's
     go, [ADR-0023](adr/0023-the-bench-measures-aerith-through-its-test-window.md) amends ADR-0013;
   - the closing review's findings fixed, first among them the probe's settle by time: mpv's
@@ -295,8 +295,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
   libwayland-client at run time, the player's included: the development shell sets
   `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
-- M1.4c's floors were measured mostly under other sessions' load (2 to 15 threads): only the
-  23.976 fps runs at 240 Hz and the 24 to 50 fps runs under VRR are quiet. Due before Stage 1's
+- M1.4c's floors were measured mostly under other sessions' load (2 to 15 threads): quiet are
+  only the 23.976 fps runs at 240 Hz (and the 24 fps ones but their last seconds), and under VRR
+  Aerith's 24 to 50 fps runs and mpv alone's 25 to 50 fps ones. Due before Stage 1's
   audit, by the owner's choice of 2026-11-14: both series again on a quiet machine
   (`BENCH_SECONDS=60 scripts/bench-window.sh <corpus> "<display>" rule`, about 30 min each), and
   the floor's 30 minutes, not taken.
@@ -330,8 +331,8 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 - mpv's window ready from the start costs 84 MiB while idle on the high tier; the lowest laptop is
   measured at M1.5.
 - The relay's thread wakes about 6 times for each frame of a 24 fps film (142 a second) under audio
-  sync, and 926 to 1,422 times a second under display sync at 240 Hz, the rule at a fixed rate
-  since M1.4c; no breakdown and no budget yet.
+  sync, and 853 to 1,083 times a second under display sync at 240 Hz (M1.4c), the rule at a fixed
+  rate; no breakdown and no budget yet.
 - ADR-0015's "mpv is told the new size once it settles" is built without a timer: one size in
   flight, the latest after it. An animated resize thus makes mpv draw at several sizes in turn;
   morphs at Stage 3 may want a settle delay.

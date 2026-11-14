@@ -802,8 +802,9 @@ in every reading counted (100 %).
 | sdr-2160p | Aerith | 37 / 10 | 19.36 ms | 12,602 of 12,642 | 10.07 W | 2.81 |
 
 mpv alone under audio sync, the rule's alternative at a fixed rate, had 0 frames delayed and its
-sync under 0.7 ms, but 1 % (25 and 50 fps) to 37 % (59.94 fps) of its refresh gaps off cadence,
-13 % at 24 fps and 9 % at 23.976 fps on a quiet machine, as at M1.4b.
+sync under 0.7 ms, but, from the series' results (one row above), 1 % (25 and 50 fps) to 37 %
+(59.94 fps) of its refresh gaps off cadence, 13 % at 24 fps and 9 % at 23.976 fps on a quiet
+machine, as at M1.4b.
 
 - **The rule holds at a fixed rate.** Aerith told a fixed rate in 523 to 1,303 ms from the first
   frame, 0.52 s at 59.94 and 60 fps and about 1.3 s at 23.976 to 25 fps, and played under display
@@ -811,7 +812,7 @@ sync under 0.7 ms, but 1 % (25 and 50 fps) to 37 % (59.94 fps) of its refresh ga
 - **On a quiet machine, the floor holds**: on `cadence-23.976`, Aerith delayed no frame and its
   sync stayed within 2.85 ms, better than mpv alone under display sync (9 delayed, 4.52 ms).
 - **Under load, both miss it alike.** The frames delayed fell almost all in seconds where other
-  programs took 2 to 15 threads; mpv's sync estimate then reached 15 to 26 ms, past the ±20 ms
+  programs took 2 to 15 threads; mpv's sync estimate then reached up to 26 ms, past the ±20 ms
   floor in some runs of either player. The 24 fps run of Aerith delayed its 12 frames in its last
   seconds, as another session took up to 15 threads.
 - Aerith's plane was scanned out for 69 % to 100 % of its frames; mpv alone, never. Aerith drew
@@ -862,11 +863,10 @@ Every Aerith run told VRR, and mpv's `display-sync-active` read false in every r
   which cost it 7 to 10 W less than display sync and kept its sync within 0.03 ms.
 - **On the quiet runs, the cadence holds**: 0.2 % to 2.4 % of spans off for Aerith (24 to 50
   fps), against 0 % to 0.6 % for mpv alone on its quiet runs (25 to 50 fps): Aerith is a little
-  behind mpv alone
-  at 25 and 50 fps (34 and 20 spans against 3 and 0), ahead at 29.97 fps. Each figure is one run.
+  behind mpv alone at 25 and 50 fps (34 and 20 spans against 3 and 0), ahead at 29.97 fps. Each figure is one run.
 - **Under load, the spans grow for every player under audio sync** (3 % to 32 %), and display
   sync under VRR is worse still: up to 583 frames delayed a minute and sync up to 75 ms where
   other programs took 4 to 14 threads. That is what the rule spares Aerith.
-- Aerith's plane was scanned out for 88 % to 100 % of its frames but at 59.94 fps (5 %), the most
-  loaded of its runs.
+- Aerith's plane was scanned out for 88 % to 100 % of its frames but at 59.94 fps (5 %), a loaded run
+  (9.85 threads).
 - The relay's thread woke 114 to 334 times a second, the window's 57 to 167.

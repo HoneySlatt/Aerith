@@ -528,9 +528,11 @@ struct Session {
     ask_relay_probe: Option<Box<dyn Fn(u64) + Send>>,
     /// The number of the last probe asked for: the relay's verdict on any other is stale.
     last_probe: u64,
-    /// Whether mpv was set to display sync for the current source. Each source starts under
-    /// audio sync, an option of its own load.
+    /// Whether mpv was last asked for display sync, for the current source or, until the next
+    /// source starts, the last one. Each source starts under audio sync, an option of its load.
     display_sync: bool,
+    /// Whether mpv last confirmed display sync for the current source.
+    confirmed_display_sync: bool,
 }
 
 impl Session {
@@ -557,6 +559,7 @@ impl Session {
             ask_relay_probe: None,
             last_probe: 0,
             display_sync: false,
+            confirmed_display_sync: false,
         }
     }
 
@@ -796,14 +799,21 @@ impl Session {
             }
             Some(Pending::Sync { open, display }) if self.current == Some(open) => {
                 if !success {
-                    // mpv kept the sync it had.
-                    self.display_sync = !display;
+                    // mpv kept the sync it had. A later switch still on its way has the last
+                    // word; without one, mpv is under the sync it last confirmed.
+                    let later = self.pending.values().any(
+                        |pending| matches!(pending, Pending::Sync { open: of, .. } if *of == open),
+                    );
+                    if !later {
+                        self.display_sync = self.confirmed_display_sync;
+                    }
                     self.emit(Event::Refused {
                         command: "video-sync",
                         reason: error(),
                     });
                     return;
                 }
+                self.confirmed_display_sync = display;
                 if !display {
                     self.ask_probe();
                 }
@@ -882,14 +892,15 @@ impl Session {
                 self.read_at = None;
                 self.picture_failed = false;
                 self.properties.clear();
+                // A switch to display sync asked for the last source may reach this one after
+                // its load's audio sync: mpv takes no command between two sources, and runs the
+                // switch as it opens this one, whether its answer came before this event or not.
+                // It is undone; after a source that ended under display sync, the undo changes
+                // nothing.
+                let switched = self.display_sync;
                 self.display_sync = false;
-                // A switch to display sync sent for the last source and not answered yet reaches
-                // this one after its own audio sync, as mpv reads commands while it opens a
-                // source: it is undone. mpv answers in order, so it is still waiting exactly then.
-                let switched_late = self.pending.values().any(|pending| {
-                    matches!(pending, Pending::Sync { open, display: true } if Some(*open) != self.current)
-                });
-                if switched_late {
+                self.confirmed_display_sync = false;
+                if switched {
                     self.request(
                         Pending::Ignored,
                         json!(["set_property", "video-sync", "audio"]),
@@ -2325,6 +2336,9 @@ mod tests {
         mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
         assert!(matches!(next(&events), Event::Ended(_, Ending::Stopped)));
         mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        // The first source ended under display sync: the undo of a late switch is sent, and
+        // changes nothing.
+        sync_set(&mut mpv, "audio", "success");
         mpv.send(json!({"event": "playback-restart"}));
         assert_eq!(next(&events), Event::Started(open));
         assert_eq!(probes_asked(&probes, 2), [1, 2]);
@@ -2410,5 +2424,79 @@ mod tests {
         mpv.send(json!({"event": "playback-restart"}));
         assert_eq!(next(&events), Event::Started(second));
         assert_eq!(probes_asked(&probes, 2), [1, 2]);
+    }
+
+    /// Opens a second source while the first plays, then has the first's verdict switch mpv to
+    /// display sync, and returns the open of the second and the switch, unanswered.
+    fn switch_while_the_next_source_loads(
+        engine: &Engine,
+        mpv: &mut FakeMpv,
+        events: &Receiver<Event>,
+        probes: &Probes,
+    ) -> (OpenId, OpenId, Value) {
+        let first = start(engine, mpv, events, 1, &json!({}));
+        probes_asked(probes, 1);
+        let second = engine.open(file("/corpus/next.mkv")).unwrap();
+        mpv.load(2);
+        tell(engine, fixed(1));
+        let switch = mpv.command();
+        assert_eq!(
+            switch["command"],
+            json!(["set_property", "video-sync", "display-resample"])
+        );
+        (first, second, switch)
+    }
+
+    #[test]
+    fn a_late_switch_answered_before_the_first_source_ends_is_undone() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        let (first, _, switch) =
+            switch_while_the_next_source_loads(&engine, &mut mpv, &events, &probes);
+        // mpv answers before its events: the switch ran on the second source.
+        mpv.answer(&switch, "success", Value::Null);
+        mpv.position(1.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        assert_eq!(next(&events), Event::Ended(first, Ending::Stopped));
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        sync_set(&mut mpv, "audio", "success");
+    }
+
+    #[test]
+    fn a_late_switch_answered_between_the_two_sources_is_undone() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        let (first, _, switch) =
+            switch_while_the_next_source_loads(&engine, &mut mpv, &events, &probes);
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        assert_eq!(next(&events), Event::Ended(first, Ending::Stopped));
+        mpv.answer(&switch, "success", Value::Null);
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        sync_set(&mut mpv, "audio", "success");
+    }
+
+    #[test]
+    fn two_refused_switches_leave_mpv_counted_under_the_sync_it_kept() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        tell(&engine, fixed(1));
+        let to_display = mpv.command();
+        tell(&engine, DisplayNews::Changed);
+        let to_audio = mpv.command();
+        assert_eq!(
+            to_audio["command"],
+            json!(["set_property", "video-sync", "audio"])
+        );
+        mpv.answer(&to_display, "property unavailable", Value::Null);
+        assert!(matches!(next(&events), Event::Refused { .. }));
+        mpv.answer(&to_audio, "property unavailable", Value::Null);
+        assert!(matches!(next(&events), Event::Refused { .. }));
+        // mpv never left audio sync: a change asks for a probe, not for audio sync.
+        tell(&engine, DisplayNews::Changed);
+        assert_eq!(probes_asked(&probes, 2), [1, 2]);
+        mpv.silent(Duration::from_millis(300));
     }
 }

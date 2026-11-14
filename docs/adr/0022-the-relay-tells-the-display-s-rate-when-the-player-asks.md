@@ -1,6 +1,7 @@
 # 0022. The relay tells the display's rate when the player asks: 24 intervals, 50 µs
 
-- Status: Accepted
+- Status: Accepted; its settle by time added on 2026-11-14, before M1.4c closed, after its
+  closing review
 - Date: 2026-11-14
 
 ## Context
@@ -44,9 +45,9 @@ relay never knows which sync mpv runs under, and the engine thread never sees a 
 **A probe lets 8 frames and 100 ms go by, then reads 24 intervals.** The 100 ms, counted on the
 compositor's clock from the first frame presented after the request, cover the presents mpv timed
 before audio sync: a film frame (41.7 ms at 23.976 fps) and the swapchain's 2 at 60 Hz (33 ms),
-whatever the refresh rate. The 8 frames are a floor beside them. An interval counts only between two frames that both carry
-`vsync` and `hw_clock` and the same refresh period; a frame without them breaks the chain. An
-interval is whole within 50 µs of a whole number of refresh periods, one or more. **At least
+whatever the refresh rate, for sources of about 10 fps and more. The 8 frames are a floor beside
+them. An interval counts only between two frames that both carry `vsync` and `hw_clock` and
+the same refresh period; a frame without them breaks the chain. An interval is whole within 50 µs of a whole number of refresh periods, one or more. **At least
 half whole is a fixed rate; fewer is VRR.** 50 µs is eight times the farthest seen at a fixed rate,
 and short of VRR's scatter. Half the intervals, 12, lies 12 from a fixed rate's 24 and 8 from
 VRR's worst 4. At 24 fps, a probe takes about 1.4 s; at 60 fps, about 0.55 s.
@@ -76,8 +77,8 @@ ended, the last verdict and how long the last probe took. The interface has no u
 - **The verdict on every frame, a sliding window**: the display's state known at once at any
   time, but a probe under display sync is meaningless, so the probe must stop anyway.
 - **A settle counted in frames only**: simpler, but mpv's leftover presents grow with the refresh
-  rate; at 360 Hz and over, they would outnumber a fixed count and read VRR as a fixed rate, as
-  M1.4c's closing review showed.
+  rate; at 480 Hz, a 24 fps frame's 22 leftover presents make 13 whole intervals of 24 under VRR,
+  and read it as a fixed rate.
 - **A tolerance of a twentieth of a refresh** (the bench's `whole_intervals`): it scales with the
   refresh, but VRR's scatter and the hardware's precision are times, not fractions. At 60 Hz it
   would be 833 µs, past VRR's scatter.
@@ -94,8 +95,13 @@ ended, the last verdict and how long the last probe took. The interface has no u
 - A compositor that offers presentation times but not from the display's hardware (wlroots'
   headless backend) keeps mpv under audio sync. KWin's virtual backend gives hardware flags, and
   a probe there ends on a fixed rate.
-- A switch to display sync and back costs a probe each time the window changes, under VRR too:
-  about 1.4 s of audio sync at 24 fps, to be measured on the desktop.
+- A switch to display sync and back costs a probe each time the window changes, under VRR too. On
+  the desktop at 240 Hz, a probe at a film's start took about 1.3 s at 23.976 to 25 fps and
+  0.52 s at 60 fps; a probe at a change of the window is not measured.
+- A source under about 10 fps (a slideshow) can outlast the settle by time after a switch back to
+  audio sync, and read VRR as a fixed rate.
+- A switch back to audio sync that mpv refused leaves it under display sync for the rest of the
+  source: the relay told the change once, and tells no other until a probe is asked.
 - The thresholds rest on one desktop at 240 Hz, under two compositors. 60 Hz, at M1.5 on the
   lowest laptop, confirms them or reopens them.
 - mpv may refuse display sync where its own conditions fail (the film's rate too far from the

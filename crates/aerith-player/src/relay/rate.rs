@@ -12,8 +12,8 @@
 //! that it looks fixed: the player probes only under audio sync, and asks for each probe.
 //!
 //! A **probe** lets [`SETTLE`] frames and [`SETTLE_NS`] go by, then reads [`INTERVALS`] intervals
-//! between frames presented one after the other. An interval is whole when it lies within [`TOLERANCE_NS`] of a
-//! whole number of the refresh period the compositor gives. The display runs at a fixed rate when
+//! between frames presented one after the other. An interval is whole when it lies within
+//! [`TOLERANCE_NS`] of a whole number of the refresh period the compositor gives. The display runs at a fixed rate when
 //! at least half the intervals are whole.
 //!
 //! The figures, set from M1.4b's logs on the owner's desktop at 240 Hz, Umbriel and KWin, by
@@ -38,7 +38,8 @@ pub(super) const SETTLE: u32 = 8;
 /// (mpv 0.42, `video/out/vo.c`): up to one film frame (41.7 ms at 23.976 fps) of presents one
 /// refresh apart, then the swapchain's two, 33 ms at 60 Hz. Those would read as whole intervals,
 /// as a VRR display fed at every refresh runs at its top rate. Counted in frames, they grow with
-/// the refresh rate (22 at 480 Hz); in time, they stay within 100 ms.
+/// the refresh rate (22 at 480 Hz); in time, they stay within 100 ms for sources of about 10 fps
+/// and more.
 pub(super) const SETTLE_NS: u128 = 100_000_000;
 
 /// The intervals a probe reads: one second of a 24 fps film.
