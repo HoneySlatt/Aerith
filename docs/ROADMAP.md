@@ -58,7 +58,7 @@ starting points.
 | Tier | Machine | State |
 |---|---|---|
 | Desktop, high | The owner's desktop: 8 cores (Ryzen 7 5800X), an RX 6900 XT class GPU, 32 GB, 3840 × 2160 at 240 Hz, HDR monitor; Umbriel on wlroots 0.20. The monitor can do VRR, but the owner turned it off: it flickers. A VRR measure is taken only when the owner turns it on for it | measurable |
-| Desktop, lowest | The owner's HP Laptop 17-ca2xxx: AMD Athlon Silver 3050U (2 cores), integrated Vega, 4 GB on one channel; measured on mains power | measurable |
+| Desktop, lowest | The owner's HP Laptop 17-ca2xxx: AMD Athlon Silver 3050U (2 cores), integrated Vega, 4 GB on one channel; NixOS with niri (Yuna later), its panel at 60 Hz, no colour management; measured on mains power | measurable |
 | Phone, high | The owner's Pixel (model recorded with the first measure) | measurable |
 | Phone, lowest | The owner's mid-range Android phone (model recorded with the first measure) | measurable |
 | Apple TV | The owner's Apple TV (model recorded with the first measure) | measurable |

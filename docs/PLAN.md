@@ -33,8 +33,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)). M1.4c done on
   2026-11-14 ([ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md),
   [ADR-0023](adr/0023-the-bench-measures-aerith-through-its-test-window.md)), its floors measured
-  under other sessions' load; to measure again on a quiet machine before Stage 1's audit. Next:
-  M1.5, on the owner's go.
+  under other sessions' load; to measure again on a quiet machine before Stage 1's audit. M1.5
+  designed on 2026-11-14 ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md),
+  [ADR-0025](adr/0025-passthrough-off-by-default-display-vdrop-checked-on-a-file.md)) and split in
+  three by the owner. M1.5a under way.
 
 ## Status
 
@@ -46,7 +48,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | Done |
 | [M1.4b](#m14b--inside-the-window-measured) | The floors measured inside the window; the plane's order and display sync decided | Done |
 | [M1.4c](#m14c--display-sync-by-the-displays-rate) | The cadence floor holds inside the window, display sync chosen by the display's rate | Done |
-| [M1.5](#m15--hdr-dolby-vision-and-passthrough-on-linux) | HDR, Dolby Vision and passthrough hold on Linux, on both tiers | Planned |
+| [M1.5a](#m15a--hdr-and-dolby-vision-through-the-relay) | HDR and Dolby Vision reach the display as mpv alone shows them | In progress |
+| [M1.5b](#m15b--passthrough) | The bitstream sent is the source's, and the cadence holds under it | Planned |
+| [M1.5c](#m15c--the-lowest-laptop) | The lowest laptop measured, display sync at 60 Hz included | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
 
 ## Stage 1 — The player on the desktop
@@ -220,15 +224,62 @@ Aerith's window under a test interface, measured against the rivals. Planned by
 
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
-- **Goal.** HDR and Dolby Vision clips reach the owner's monitor as mpv alone shows them; audio
-  passes through intact.
-- **Delivers.** The colour description carried to the subsurface; the SDR interface over HDR video;
-  passthrough checked by capturing what the audio output receives; the lowest laptop measured,
-  cadence and display sync at 60 Hz there included (from M1.4b).
-- **Done when.** Every floor of the bench holds on both tiers on Linux.
-- **How to test.** The bench; the bitstream comparison script.
-- **Measured.** All of Stage 1's budgets on Linux.
-- **By hand.** The owner compares the HDR clips with mpv alone on the HDR monitor.
+Designed on 2026-11-14 ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md),
+[ADR-0025](adr/0025-passthrough-off-by-default-display-vdrop-checked-on-a-file.md)); split in
+three by the owner. Together they meet M1.5's goal: HDR and Dolby Vision clips reach the owner's
+monitor as mpv alone shows them, audio passes through intact, and every floor of the bench holds
+on both tiers on Linux.
+
+### M1.5a — HDR and Dolby Vision through the relay
+
+- **Goal.** The corpus's HDR and Dolby Vision clips reach the display with the colour description
+  mpv alone gives them; mpv inside Aerith no longer dithers to 8 bits.
+- **Delivers.**
+  - The relay offering mpv `wp_color_manager_v1`, listed, checked against the union of wlroots
+    0.20's, Umbriel's, KWin 6.8's and Yuna's refusals, translated per version, fuzzed
+    ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md)).
+  - The fake compositor with a colour manager and SDR and PQ preferred descriptions; the real mpv
+    playing each HDR and Dolby Vision clip against it.
+  - The player's report: Dolby Vision as mpv applies it, the container's claim apart.
+  - The bench reading the description set on each plane, and the descriptions refused.
+- **Done when.** The tests pass; on the owner's display, the HDR clips' descriptions match mpv
+  alone's under Umbriel with HDR on and under KWin; the frames match mpv alone's; the owner has
+  compared them by eye; `set_luminances` is decided on its figures and ADR-0024 amended.
+- **How to test.** `cargo test`; `scripts/bench-window.sh` on the owner's display.
+- **Measured.** On Umbriel at 240 Hz under display sync, with and without `set_luminances`:
+  scanout, GPU power, frames against mpv alone (about 15 min). Then the HDR and Dolby Vision clips
+  under Umbriel with HDR on (about 40 min with the owner's look), and under KWin with HDR on
+  (about 20 min). Each session on the owner's go.
+- **By hand.** The owner turns HDR on, and compares the clips by eye.
+
+### M1.5b — Passthrough
+
+- **Goal.** The bitstream Aerith sends is the source's, for E-AC3, TrueHD, DTS and DTS-HD, and the
+  cadence holds under passthrough.
+- **Delivers** ([ADR-0025](adr/0025-passthrough-off-by-default-display-vdrop-checked-on-a-file.md)).
+  The player's passthrough setting, off by default, and its report of what was sent;
+  `display-vdrop` under passthrough at a fixed rate; the capture through ALSA's `file` device and
+  through the bench's PipeWire into a device named `hdmi`; the bench's IEC 61937 parser, fuzzed.
+- **Done when.** Every passthrough clip's payload matches the source's packets, both ways; the
+  cadence and sync under passthrough are measured.
+- **How to test.** `cargo test`; the bench's passthrough check, without a window and inside it.
+- **Measured.** Frames dropped or repeated under `display-vdrop`, sync, at 240 Hz.
+
+### M1.5c — The lowest laptop
+
+- **Goal.** The lowest laptop measured: the rule of display sync at 60 Hz, the 4K remux, the
+  first frame, the memory, against mpv alone and the rivals.
+- **Delivers.** The bench reading swap, the lowest `MemAvailable`, and the APU's GTT and VRAM; one
+  script for the owner, resumable, that checks the machine first (power sensor, 60 Hz, mains,
+  corpus, quiet), alternates mpv alone and Aerith clip by clip, then runs M1.2's laptop set of the
+  rivals; its procedure in `CONTRIBUTING.md`.
+- **Done when.** The owner has run it on the HP Laptop 17-ca2xxx (NixOS, niri) and brought the
+  results back; the figures are in `docs/measurements.md`.
+- **How to test.** The script tried in `agent-headless`; then by the owner.
+- **Measured.** Cadence and display sync at 60 Hz on every cadence clip, the 4K HDR10 remux's
+  memory and power, the first frame, mpv's idle window. Runs of 2 to 5 minutes stand in for the
+  floors' 30 minutes, which stay debt.
+- **By hand.** The owner runs the laptop, about 2 hours, in one sitting or several.
 
 ### M1.6 — Windows
 

@@ -23,12 +23,14 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0012](0012-the-test-corpus.md) | The test corpus: generated, with a few clips fetched | Accepted |
 | [0013](0013-the-bench.md) | The bench: a Rust tool that drives each rival's engine, in silence | Accepted; amended by 0023 |
 | [0014](0014-the-player-interface-and-mpvs-connection.md) | The player's interface: commands and numbered events; mpv over its standard input | Accepted; amended by 0016 |
-| [0015](0015-a-relay-for-mpvs-wayland-surface.md) | mpv's picture through a relay on the interface's own Wayland connection | Accepted; amended by 0018 and 0020 |
+| [0015](0015-a-relay-for-mpvs-wayland-surface.md) | mpv's picture through a relay on the interface's own Wayland connection | Accepted; amended by 0018, 0020 and 0024 |
 | [0016](0016-the-clock-carries-the-engines-rate.md) | The clock carries the engine's rate, and is read again every 10 s | Accepted; amends 0014 |
 | [0017](0017-a-test-interface-on-winit-and-wgpu.md) | A test interface on winit and wgpu, thrown away at Stage 3 | Accepted |
 | [0018](0018-what-building-the-relay-changed.md) | What building the relay changed: the socket read by the relay, no sync objects, mpv kept from the compositor | Accepted; amends 0015 |
 | [0019](0019-the-video-above-a-black-root.md) | The video above a black root, the interface in a surface above it | Accepted |
 | [0020](0020-what-measuring-the-relay-changed.md) | What measuring the relay changed: mpv's opaque region and the compositor's fifo | Accepted; amends 0015 |
-| [0021](0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md) | Display sync at a fixed refresh rate, audio sync under VRR | Accepted |
+| [0021](0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md) | Display sync at a fixed refresh rate, audio sync under VRR | Accepted; amended by 0025 |
 | [0022](0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md) | The relay tells the display's rate when the player asks: 24 intervals, 50 µs | Accepted |
 | [0023](0023-the-bench-measures-aerith-through-its-test-window.md) | The bench measures Aerith through its test window, as it measures a rival | Accepted; amends 0013 |
+| [0024](0024-the-relay-passes-mpvs-colour-description.md) | The relay passes mpv's colour description to the plane; the interface declares none | Accepted; amends 0015 |
+| [0025](0025-passthrough-off-by-default-display-vdrop-checked-on-a-file.md) | Passthrough off by default, frames dropped or repeated under it, checked on a file | Accepted; amends 0021 |

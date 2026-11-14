@@ -1,6 +1,6 @@
 # 0021. Display sync at a fixed refresh rate, audio sync under VRR
 
-- Status: Accepted
+- Status: Accepted; amended by 0025 (`display-vdrop` under passthrough)
 - Date: 2026-11-12
 
 ## Context
