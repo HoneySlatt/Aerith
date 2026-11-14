@@ -48,6 +48,7 @@ use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use wayland_server::Resource;
 use wayland_server::protocol::wl_callback::WlCallback as MpvCallback;
 
+use super::colour::{self, Advertised, HostColourManager};
 use super::surface::Presented;
 use super::{Host, Output, State, check};
 
@@ -66,6 +67,8 @@ pub(super) struct HostGlobals {
     pub(super) fractional_scale: Option<WpFractionalScaleManagerV1>,
     pub(super) content_type: Option<WpContentTypeManagerV1>,
     pub(super) fifo: Option<WpFifoManagerV1>,
+    /// The colour manager, and what it advertised ([`super::colour`]).
+    pub(super) colour: Option<HostColourManager>,
 }
 
 /// The highest version of each global the relay speaks.
@@ -117,6 +120,14 @@ impl HostGlobals {
             fractional_scale: globals.bind(qh, 1..=1, ()).ok(),
             content_type: globals.bind(qh, 1..=1, ()).ok(),
             fifo: globals.bind(qh, 1..=1, ()).ok(),
+            // What it advertises comes at once, before the round trip of the start ends.
+            colour: globals
+                .bind(qh, 1..=colour::VERSION, ())
+                .ok()
+                .map(|manager| HostColourManager {
+                    manager,
+                    advertised: Advertised::default(),
+                }),
         })
     }
 }
@@ -176,6 +187,8 @@ impl Host {
             fractional_scale,
             content_type,
             fifo,
+            colour_surface: None,
+            colour_feedback: None,
             default_feedback,
             surface_feedback,
             preferred_scale: None,
@@ -201,6 +214,12 @@ impl Host {
         }
         if let Some(fifo) = &self.fifo {
             fifo.destroy();
+        }
+        if let Some(colour_surface) = &self.colour_surface {
+            colour_surface.destroy();
+        }
+        if let Some(colour_feedback) = &self.colour_feedback {
+            colour_feedback.destroy();
         }
         if let Some(fractional_scale) = &self.fractional_scale {
             fractional_scale.destroy();
@@ -228,6 +247,9 @@ impl Host {
         }
         if let Some(manager) = &globals.fifo {
             manager.destroy();
+        }
+        if let Some(colour) = &globals.colour {
+            colour.manager.destroy();
         }
         // wl_compositor up to version 6 has no destructor: the compositor frees it with the
         // connection. The destructors go out at the connection's next flush, the interface's or

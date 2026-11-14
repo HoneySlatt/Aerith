@@ -11,12 +11,17 @@
 //! without a destination): such an error, recorded in [`Recorded::errors`], closes the interface's
 //! connection, as a real compositor would.
 //!
+//! Started with [`FakeHost::start_with_colour`], it has a colour manager too (version 2), which
+//! advertises a list the test chooses ([`ColourList`]), answers each description as the test says
+//! (ready or failed), gives the preferred description the test sets ([`ColourDescription`]), and
+//! raises the errors wlroots 0.20, KWin 6.8 and Umbriel raise on colour descriptions.
+//!
 //! The interface ([`Interface`]) is the test's own libwayland connection to it, with a parent
 //! surface and, if asked, a subsurface of its own: what the relay joins, as it joins a real
 //! window's connection. This file is shared by the integration tests (`tests/common/mod.rs`) and
 //! by the relay's unit tests (`src/relay/tests.rs`, through `#[path]`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
@@ -34,6 +39,22 @@ use wayland_client::protocol::wl_subcompositor::WlSubcompositor as ClientSubcomp
 use wayland_client::protocol::wl_subsurface::WlSubsurface as ClientSubsurface;
 use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 use wayland_client::{Connection, EventQueue, Proxy, QueueHandle};
+use wayland_protocols::wp::color_management::v1::server::wp_color_management_surface_feedback_v1::{
+    self, WpColorManagementSurfaceFeedbackV1,
+};
+use wayland_protocols::wp::color_management::v1::server::wp_color_management_surface_v1::{
+    self, WpColorManagementSurfaceV1,
+};
+use wayland_protocols::wp::color_management::v1::server::wp_color_manager_v1::{
+    self, Feature, Primaries, RenderIntent, TransferFunction, WpColorManagerV1,
+};
+use wayland_protocols::wp::color_management::v1::server::wp_image_description_creator_params_v1::{
+    self, WpImageDescriptionCreatorParamsV1,
+};
+use wayland_protocols::wp::color_management::v1::server::wp_image_description_info_v1::WpImageDescriptionInfoV1;
+use wayland_protocols::wp::color_management::v1::server::wp_image_description_v1::{
+    self, Cause, WpImageDescriptionV1,
+};
 use wayland_protocols::wp::content_type::v1::server::wp_content_type_manager_v1::{
     self, WpContentTypeManagerV1,
 };
@@ -140,6 +161,29 @@ pub struct Recorded {
     /// `fractional_scales`, rather than at once.
     pub fractional_scale_later: bool,
     pub fractional_scales: Vec<WpFractionalScaleV1>,
+    /// What the colour manager advertises, if the compositor has one.
+    colour: Option<ColourList>,
+    /// The description `get_preferred` answers with, and whether its information carries an ICC
+    /// profile too.
+    pub preferred: ColourDescription,
+    pub preferred_icc: bool,
+    /// Whether the descriptions a client creates fail, with the cause `unsupported`.
+    pub descriptions_fail: bool,
+    /// Whether the preferred descriptions fail, with the cause `low_version`.
+    pub preferred_fails: bool,
+    /// How many times a description's information was asked for.
+    pub information_asked: u32,
+    /// The parametric creators alive, with what each set.
+    creators: HashMap<ObjectId, ColourDescription>,
+    descriptions: HashMap<ObjectId, FakeDescription>,
+    /// The surfaces that have a colour-management surface.
+    colour_surfaces: HashSet<ObjectId>,
+    colour_feedbacks: Vec<WpColorManagementSurfaceFeedbackV1>,
+    /// Information asked for, sent once the request that made its object is handled: its `done`
+    /// destroys it, which cannot happen while the request makes it.
+    information: Vec<(WpImageDescriptionInfoV1, ColourDescription)>,
+    /// The identity of the last description made.
+    identity: u64,
 }
 
 /// One surface, as its client set it.
@@ -164,8 +208,11 @@ pub struct SurfaceRecord {
     pub commits: u32,
     /// Commits that attached a buffer.
     pub buffer_commits: u32,
-    /// Every request on the surface, its subsurface and its viewport, by name, in order.
+    /// Every request on the surface, its subsurface, its viewport, its fifo and its
+    /// colour-management surface, by name, in order.
     pub log: Vec<&'static str>,
+    /// The colour description committed, with its render intent.
+    pub colour: Option<(ColourDescription, u32)>,
     pending: Pending,
     /// Committed frame callbacks and feedback, not answered yet.
     callbacks: Vec<WlCallback>,
@@ -184,6 +231,7 @@ struct Pending {
     destination: Option<Option<(i32, i32)>>,
     input_region: Option<Option<Vec<[i32; 4]>>>,
     opaque_region: Option<Option<Vec<[i32; 4]>>>,
+    colour: Option<Option<(ColourDescription, u32)>>,
 }
 
 /// A surface's subsurface role.
@@ -317,6 +365,15 @@ impl FakeHost {
 
     /// Starts the fake compositor without the globals `missing` names.
     pub fn start_without(missing: &[&str]) -> Self {
+        Self::start_configured(missing, None)
+    }
+
+    /// Starts the fake compositor with a colour manager that advertises `colour`.
+    pub fn start_with_colour(colour: ColourList) -> Self {
+        Self::start_configured(&[], Some(colour))
+    }
+
+    fn start_configured(missing: &[&str], colour: Option<ColourList>) -> Self {
         let mut display: Display<HostState> = Display::new().unwrap();
         let handle = display.handle();
         let offered = |name: &str| !missing.contains(&name);
@@ -332,8 +389,18 @@ impl FakeHost {
         handle.create_global::<HostState, WpFractionalScaleManagerV1, ()>(1, ());
         handle.create_global::<HostState, WpContentTypeManagerV1, ()>(1, ());
         handle.create_global::<HostState, WpFifoManagerV1, ()>(1, ());
+        if colour.is_some() {
+            handle.create_global::<HostState, WpColorManagerV1, ()>(2, ());
+        }
         let shared: Shared = Arc::default();
-        shared.0.lock().unwrap().answer_at_once = true;
+        {
+            let mut recorded = shared.0.lock().unwrap();
+            recorded.answer_at_once = true;
+            recorded.colour = colour;
+            recorded.preferred = ColourDescription::sdr();
+            // Above 32 bits, so that both halves of an identity carry something.
+            recorded.identity = 1 << 32;
+        }
         let (stop, stopped) = UnixStream::pair().unwrap();
         let mut state = HostState {
             shared: Arc::clone(&shared),
@@ -356,6 +423,7 @@ impl FakeHost {
                     }
                     if ready.1 {
                         let _ = display.dispatch_clients(&mut state);
+                        state.recorded().send_information();
                         let _ = display.flush_clients();
                         state.shared.1.notify_all();
                     }
@@ -444,6 +512,19 @@ impl FakeHost {
     /// Answers every frame callback committed so far.
     pub fn frame_done(&self) {
         self.with(Recorded::frame_done);
+    }
+
+    /// Makes `preferred` the preferred description of every surface, and tells each colour
+    /// feedback, as a compositor does when a surface moves to an output of another kind.
+    pub fn change_preferred(&self, preferred: ColourDescription) {
+        self.with(|recorded| {
+            recorded.preferred = preferred;
+            let identity = recorded.next_identity();
+            recorded.colour_feedbacks.retain(Resource::is_alive);
+            for feedback in &recorded.colour_feedbacks {
+                feedback.preferred_changed2((identity >> 32) as u32, identity as u32);
+            }
+        });
     }
 
     /// Connects an interface: a libwayland connection with a parent surface, and a subsurface
@@ -752,6 +833,7 @@ impl Dispatch<WlCompositor, ()> for HostState {
                     commits: 0,
                     buffer_commits: 0,
                     log: Vec::new(),
+                    colour: None,
                     pending: Pending::default(),
                     callbacks: Vec::new(),
                     feedbacks: Vec::new(),
@@ -944,6 +1026,9 @@ fn commit(recorded: &mut Recorded, resource: &WlSurface) {
     }
     if let Some(region) = pending.opaque_region {
         surface.opaque_region = region;
+    }
+    if let Some(colour) = pending.colour {
+        surface.colour = colour;
     }
     surface.callbacks.extend(pending.callbacks);
     surface.feedbacks.extend(pending.feedbacks);
@@ -1573,5 +1658,611 @@ impl Dispatch<WpContentTypeV1, ()> for HostState {
         {
             state.recorded().content_types.push(value.into());
         }
+    }
+}
+
+/// What the fake compositor's colour manager advertises, by the protocol's values.
+#[derive(Clone, Debug)]
+pub struct ColourList {
+    pub features: Vec<u32>,
+    pub intents: Vec<u32>,
+    pub transfer_functions: Vec<u32>,
+    pub primaries: Vec<u32>,
+}
+
+impl Default for ColourList {
+    /// Parametric descriptions with luminances and the mastering display, the perceptual intent,
+    /// six transfer functions and three sets of primaries, close to KWin's list.
+    fn default() -> Self {
+        Self {
+            features: [
+                Feature::Parametric,
+                Feature::SetLuminances,
+                Feature::SetMasteringDisplayPrimaries,
+            ]
+            .map(u32::from)
+            .to_vec(),
+            intents: vec![RenderIntent::Perceptual.into()],
+            transfer_functions: [
+                TransferFunction::Gamma22,
+                TransferFunction::St2084Pq,
+                TransferFunction::Hlg,
+                TransferFunction::Bt1886,
+                TransferFunction::ExtLinear,
+                TransferFunction::CompoundPower24,
+            ]
+            .map(u32::from)
+            .to_vec(),
+            primaries: [Primaries::Srgb, Primaries::Bt2020, Primaries::DisplayP3]
+                .map(u32::from)
+                .to_vec(),
+        }
+    }
+}
+
+/// A colour description: what a client set on a parametric creator, or the preferred description
+/// the compositor gives, whose mastering display and light levels are then its target's.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ColourDescription {
+    pub transfer_function: u32,
+    pub primaries: u32,
+    /// The minimum in 1/10,000 cd/m², the maximum and the reference in cd/m².
+    pub luminances: Option<[u32; 3]>,
+    pub mastering_primaries: Option<[i32; 8]>,
+    /// The minimum in 1/10,000 cd/m², the maximum in cd/m².
+    pub mastering_luminance: Option<[u32; 2]>,
+    pub max_cll: Option<u32>,
+    pub max_fall: Option<u32>,
+}
+
+/// BT.2020's primaries and white, times 1,000,000.
+pub const BT2020_PRIMARIES: [i32; 8] = [
+    708_000, 292_000, 170_000, 797_000, 131_000, 46_000, 312_700, 329_000,
+];
+
+impl ColourDescription {
+    /// An SDR output's: gamma 2.2 with sRGB's primaries, from 0.2 to 80 cd/m².
+    pub fn sdr() -> Self {
+        Self {
+            transfer_function: TransferFunction::Gamma22.into(),
+            primaries: Primaries::Srgb.into(),
+            luminances: Some([2_000, 80, 80]),
+            ..Self::default()
+        }
+    }
+
+    /// An HDR output's: PQ with BT.2020's primaries, a reference of 203 cd/m², and a target
+    /// volume of Display P3 up to 1,000 cd/m².
+    pub fn pq() -> Self {
+        Self {
+            transfer_function: TransferFunction::St2084Pq.into(),
+            primaries: Primaries::Bt2020.into(),
+            luminances: Some([50, 10_000, 203]),
+            mastering_primaries: Some(named_coordinates(Primaries::DisplayP3.into())),
+            mastering_luminance: Some([1, 1_000]),
+            max_cll: Some(1_000),
+            max_fall: Some(400),
+        }
+    }
+}
+
+/// The chromaticities of named primaries the fake knows, times 1,000,000; sRGB's for the others.
+fn named_coordinates(primaries: u32) -> [i32; 8] {
+    match Primaries::try_from(primaries) {
+        Ok(Primaries::Bt2020) => BT2020_PRIMARIES,
+        Ok(Primaries::DisplayP3) => [
+            680_000, 320_000, 265_000, 690_000, 150_000, 60_000, 312_700, 329_000,
+        ],
+        _ => [
+            640_000, 330_000, 300_000, 600_000, 150_000, 60_000, 312_700, 329_000,
+        ],
+    }
+}
+
+/// A minimum luminance in 1/10,000 cd/m², decoded as wlroots 0.20 and Umbriel decode it, in f32:
+/// `static_cast<float>(minimum) / 10000.0F`.
+fn decoded_minimum(minimum: u32) -> f32 {
+    minimum as f32 / 10_000.0
+}
+
+/// The raw value of an enum the client sent.
+fn raw<T: Into<u32>>(value: WEnum<T>) -> u32 {
+    match value {
+        WEnum::Value(value) => value.into(),
+        WEnum::Unknown(value) => value,
+    }
+}
+
+/// A description the fake made: what it describes, whether it failed, and whether a client
+/// created it, whose information the protocol does not give.
+struct FakeDescription {
+    description: ColourDescription,
+    failed: bool,
+    own: bool,
+}
+
+impl Recorded {
+    fn next_identity(&mut self) -> u64 {
+        self.identity += 1;
+        self.identity
+    }
+
+    /// Whether the colour manager advertises `value` among `list`'s.
+    fn advertises(&self, list: impl Fn(&ColourList) -> &Vec<u32>, value: u32) -> bool {
+        self.colour
+            .as_ref()
+            .is_some_and(|colour| list(colour).contains(&value))
+    }
+}
+
+impl GlobalDispatch<WpColorManagerV1, ()> for HostState {
+    fn bind(
+        state: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<WpColorManagerV1>,
+        _: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        let manager = data_init.init(resource, ());
+        let Some(colour) = state.recorded().colour.clone() else {
+            return;
+        };
+        for intent in colour.intents {
+            manager.supported_intent(RenderIntent::try_from(intent).unwrap());
+        }
+        for feature in colour.features {
+            manager.supported_feature(Feature::try_from(feature).unwrap());
+        }
+        for tf in colour.transfer_functions {
+            manager.supported_tf_named(TransferFunction::try_from(tf).unwrap());
+        }
+        for primaries in colour.primaries {
+            manager.supported_primaries_named(Primaries::try_from(primaries).unwrap());
+        }
+        manager.done();
+    }
+}
+
+impl Dispatch<WpColorManagerV1, ()> for HostState {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        manager: &WpColorManagerV1,
+        request: wp_color_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        use wp_color_manager_v1::{Error, Request};
+        let mut recorded = state.recorded();
+        let unsupported = Error::UnsupportedFeature.into();
+        match request {
+            Request::GetSurface { id, surface } => {
+                if !recorded.colour_surfaces.insert(surface.id()) {
+                    recorded.error(
+                        manager,
+                        Error::SurfaceExists.into(),
+                        "wp_color_management_surface_v1 already constructed for this surface"
+                            .to_owned(),
+                    );
+                    return;
+                }
+                data_init.init(id, surface.id());
+            }
+            Request::GetSurfaceFeedback { id, surface } => {
+                let feedback = data_init.init(id, surface.id());
+                recorded.colour_feedbacks.push(feedback);
+            }
+            Request::CreateParametricCreator { obj } => {
+                let creator = data_init.init(obj, ());
+                recorded
+                    .creators
+                    .insert(creator.id(), ColourDescription::default());
+            }
+            Request::CreateIccCreator { .. } => {
+                recorded.error(
+                    manager,
+                    unsupported,
+                    "new_icc_creator is not supported".to_owned(),
+                );
+            }
+            Request::CreateWindowsScrgb { .. } => {
+                recorded.error(
+                    manager,
+                    unsupported,
+                    "windows_scrgb is not supported".to_owned(),
+                );
+            }
+            Request::GetOutput { .. } | Request::GetImageDescription { .. } => {
+                recorded.error(manager, unsupported, "not expected of the relay".to_owned());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A parametric creator, checked as wlroots 0.20, KWin 6.8 and Umbriel check one.
+impl Dispatch<WpImageDescriptionCreatorParamsV1, ()> for HostState {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        creator: &WpImageDescriptionCreatorParamsV1,
+        request: wp_image_description_creator_params_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        use wp_image_description_creator_params_v1::{Error, Request};
+        let mut recorded = state.recorded();
+        let recorded = &mut *recorded;
+        let Some(mut set) = recorded.creators.remove(&creator.id()) else {
+            return;
+        };
+        let refusal: Option<(Error, &str)> = match request {
+            Request::Create { image_description } => {
+                let refusal = if set.transfer_function == 0 {
+                    Some((Error::IncompleteSet, "missing transfer function"))
+                } else if set.primaries == 0 {
+                    Some((Error::IncompleteSet, "missing primaries"))
+                } else if let (Some(cll @ 1..), Some(fall @ 1..)) = (set.max_cll, set.max_fall)
+                    && fall > cll
+                {
+                    Some((
+                        Error::InvalidLuminance,
+                        "max_fall must be less or equal to max_cll",
+                    ))
+                } else {
+                    None
+                };
+                if let Some((code, message)) = refusal {
+                    recorded.error(creator, code.into(), message.to_owned());
+                    return;
+                }
+                let description = data_init.init(image_description, ());
+                let failed = recorded.descriptions_fail;
+                if failed {
+                    description.failed(
+                        Cause::Unsupported,
+                        "the fake compositor fails it".to_owned(),
+                    );
+                } else {
+                    let identity = recorded.next_identity();
+                    description.ready2((identity >> 32) as u32, identity as u32);
+                }
+                recorded.descriptions.insert(
+                    description.id(),
+                    FakeDescription {
+                        description: set,
+                        failed,
+                        own: true,
+                    },
+                );
+                return;
+            }
+            Request::SetTfNamed { tf } => {
+                let tf = raw(tf);
+                if set.transfer_function != 0 {
+                    Some((Error::AlreadySet, "transfer function already set"))
+                } else if !recorded.advertises(|list| &list.transfer_functions, tf) {
+                    Some((Error::InvalidTf, "invalid transfer function"))
+                } else {
+                    set.transfer_function = tf;
+                    None
+                }
+            }
+            Request::SetPrimariesNamed { primaries } => {
+                let primaries = raw(primaries);
+                if set.primaries != 0 {
+                    Some((Error::AlreadySet, "primaries already set"))
+                } else if !recorded.advertises(|list| &list.primaries, primaries) {
+                    Some((Error::InvalidPrimariesNamed, "invalid primaries"))
+                } else {
+                    set.primaries = primaries;
+                    None
+                }
+            }
+            Request::SetTfPower { .. } => {
+                Some((Error::UnsupportedFeature, "set_tf_power is not supported"))
+            }
+            Request::SetPrimaries { .. } => {
+                Some((Error::UnsupportedFeature, "set_primaries is not supported"))
+            }
+            Request::SetLuminances {
+                min_lum,
+                max_lum,
+                reference_lum,
+            } => {
+                // As Umbriel: `static_cast<float>(maximum) <= min`, the minimum in f32.
+                let at_or_below = |value: u32| value as f32 <= decoded_minimum(min_lum);
+                if !recorded.advertises(|list| &list.features, Feature::SetLuminances.into()) {
+                    Some((Error::UnsupportedFeature, "set_luminances is not supported"))
+                } else if set.luminances.is_some() {
+                    Some((Error::AlreadySet, "luminances already set"))
+                } else if at_or_below(max_lum) || at_or_below(reference_lum) {
+                    Some((Error::InvalidLuminance, "invalid luminances"))
+                } else {
+                    set.luminances = Some([min_lum, max_lum, reference_lum]);
+                    None
+                }
+            }
+            Request::SetMasteringDisplayPrimaries {
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                w_x,
+                w_y,
+            } => {
+                let feature = Feature::SetMasteringDisplayPrimaries.into();
+                if !recorded.advertises(|list| &list.features, feature) {
+                    Some((
+                        Error::UnsupportedFeature,
+                        "mastering display primaries are not supported",
+                    ))
+                } else if set.mastering_primaries.is_some() {
+                    Some((Error::AlreadySet, "mastering display primaries already set"))
+                } else {
+                    set.mastering_primaries = Some([r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y]);
+                    None
+                }
+            }
+            Request::SetMasteringLuminance { min_lum, max_lum } => {
+                let feature = Feature::SetMasteringDisplayPrimaries.into();
+                if !recorded.advertises(|list| &list.features, feature) {
+                    Some((
+                        Error::UnsupportedFeature,
+                        "mastering luminances are not supported",
+                    ))
+                } else if set.mastering_luminance.is_some() {
+                    Some((Error::AlreadySet, "mastering luminance already set"))
+                } else if max_lum as f32 <= decoded_minimum(min_lum) {
+                    Some((
+                        Error::InvalidLuminance,
+                        "max luminance must be greater than min luminance",
+                    ))
+                } else {
+                    set.mastering_luminance = Some([min_lum, max_lum]);
+                    None
+                }
+            }
+            Request::SetMaxCll { max_cll } => {
+                if set.max_cll.is_some() {
+                    Some((Error::AlreadySet, "max_cll is already set"))
+                } else {
+                    set.max_cll = Some(max_cll);
+                    None
+                }
+            }
+            Request::SetMaxFall { max_fall } => {
+                if set.max_fall.is_some() {
+                    Some((Error::AlreadySet, "max_fall is already set"))
+                } else {
+                    set.max_fall = Some(max_fall);
+                    None
+                }
+            }
+            _ => None,
+        };
+        recorded.creators.insert(creator.id(), set);
+        if let Some((code, message)) = refusal {
+            recorded.error(creator, code.into(), message.to_owned());
+        }
+    }
+}
+
+impl Dispatch<WpImageDescriptionV1, ()> for HostState {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        description: &WpImageDescriptionV1,
+        request: wp_image_description_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        use wp_image_description_v1::{Error, Request};
+        let mut recorded = state.recorded();
+        match request {
+            Request::GetInformation { information } => {
+                recorded.information_asked += 1;
+                let Some(known) = recorded.descriptions.get(&description.id()) else {
+                    return;
+                };
+                if known.failed {
+                    recorded.error(
+                        description,
+                        Error::NotReady.into(),
+                        "image description is in failed state".to_owned(),
+                    );
+                    return;
+                }
+                if known.own {
+                    recorded.error(
+                        description,
+                        Error::NoInformation.into(),
+                        "get_information not allowed".to_owned(),
+                    );
+                    return;
+                }
+                let information = data_init.init(information, ());
+                let description = known.description.clone();
+                recorded.information.push((information, description));
+            }
+            Request::Destroy => {
+                recorded.descriptions.remove(&description.id());
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Recorded {
+    /// Sends the information asked for.
+    fn send_information(&mut self) {
+        for (information, description) in std::mem::take(&mut self.information) {
+            send_information(&information, &description, self.preferred_icc);
+        }
+    }
+}
+
+/// Tells everything of a description, as the protocol lists it, then `done`.
+fn send_information(
+    information: &WpImageDescriptionInfoV1,
+    description: &ColourDescription,
+    icc: bool,
+) {
+    let coordinates = named_coordinates(description.primaries);
+    let [r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y] = coordinates;
+    information.primaries(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y);
+    information.primaries_named(Primaries::try_from(description.primaries).unwrap());
+    information.tf_named(TransferFunction::try_from(description.transfer_function).unwrap());
+    let [min, max, reference] = description.luminances.unwrap_or([2_000, 80, 80]);
+    information.luminances(min, max, reference);
+    let [r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y] =
+        description.mastering_primaries.unwrap_or(coordinates);
+    information.target_primaries(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y);
+    let [target_min, target_max] = description.mastering_luminance.unwrap_or([min, max]);
+    information.target_luminance(target_min, target_max);
+    if let Some(max_cll) = description.max_cll {
+        information.target_max_cll(max_cll);
+    }
+    if let Some(max_fall) = description.max_fall {
+        information.target_max_fall(max_fall);
+    }
+    if icc {
+        let profile: OwnedFd =
+            rustix::fs::memfd_create("fake-icc-profile", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+        rustix::fs::ftruncate(&profile, 128).unwrap();
+        information.icc_file(profile.as_fd(), 128);
+    }
+    information.done();
+}
+
+impl Dispatch<WpImageDescriptionInfoV1, ()> for HostState {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &WpImageDescriptionInfoV1,
+        _: <WpImageDescriptionInfoV1 as Resource>::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
+}
+
+/// A colour-management surface: its requests go to its surface's log and pending state, checked
+/// as wlroots 0.20, KWin 6.8 and Umbriel check them.
+impl Dispatch<WpColorManagementSurfaceV1, ObjectId> for HostState {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &WpColorManagementSurfaceV1,
+        request: wp_color_management_surface_v1::Request,
+        surface: &ObjectId,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        use wp_color_management_surface_v1::{Error, Request};
+        let mut recorded = state.recorded();
+        let recorded = &mut *recorded;
+        let inert = recorded
+            .surface(surface)
+            .is_none_or(|record| record.destroyed);
+        let (name, change) = match request {
+            Request::SetImageDescription {
+                image_description,
+                render_intent,
+            } => {
+                if inert {
+                    let message = "set_image_description cannot be sent on an inert object";
+                    recorded.error(resource, Error::Inert.into(), message.to_owned());
+                    return;
+                }
+                let ready = recorded
+                    .descriptions
+                    .get(&image_description.id())
+                    .filter(|known| !known.failed)
+                    .map(|known| known.description.clone());
+                let Some(description) = ready else {
+                    let message = "Image description to be set is invalid";
+                    recorded.error(resource, Error::ImageDescription.into(), message.to_owned());
+                    return;
+                };
+                let intent = raw(render_intent);
+                if !recorded.advertises(|list| &list.intents, intent) {
+                    let message = "invalid render intent";
+                    recorded.error(resource, Error::RenderIntent.into(), message.to_owned());
+                    return;
+                }
+                ("set_image_description", Some(Some((description, intent))))
+            }
+            Request::UnsetImageDescription => {
+                if inert {
+                    let message = "unset_image_description cannot be sent on an inert object";
+                    recorded.error(resource, Error::Inert.into(), message.to_owned());
+                    return;
+                }
+                ("unset_image_description", Some(None))
+            }
+            Request::Destroy => {
+                recorded.colour_surfaces.remove(surface);
+                ("destroy colour surface", Some(None))
+            }
+            _ => return,
+        };
+        if let Some(record) = recorded.surface_mut(surface) {
+            record.log.push(name);
+            record.pending.colour = change;
+        }
+    }
+}
+
+/// A colour feedback: each preferred description is the test's, ready at once.
+impl Dispatch<WpColorManagementSurfaceFeedbackV1, ObjectId> for HostState {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &WpColorManagementSurfaceFeedbackV1,
+        request: wp_color_management_surface_feedback_v1::Request,
+        surface: &ObjectId,
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        use wp_color_management_surface_feedback_v1::{Error, Request};
+        let mut recorded = state.recorded();
+        let id = match request {
+            Request::GetPreferred { image_description }
+            | Request::GetPreferredParametric { image_description } => image_description,
+            _ => return,
+        };
+        if recorded
+            .surface(surface)
+            .is_none_or(|record| record.destroyed)
+        {
+            let message = "get_preferred sent on inert feedback surface";
+            recorded.error(resource, Error::Inert.into(), message.to_owned());
+            return;
+        }
+        let description = data_init.init(id, ());
+        let failed = recorded.preferred_fails;
+        if failed {
+            description.failed(Cause::LowVersion, "the fake compositor fails it".to_owned());
+        } else {
+            let identity = recorded.next_identity();
+            description.ready2((identity >> 32) as u32, identity as u32);
+        }
+        let preferred = recorded.preferred.clone();
+        recorded.descriptions.insert(
+            description.id(),
+            FakeDescription {
+                description: preferred,
+                failed,
+                own: false,
+            },
+        );
     }
 }

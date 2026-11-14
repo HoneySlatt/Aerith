@@ -16,11 +16,11 @@
 //!
 //! **What mpv sees.** A list of globals, not a filter: `wl_compositor`, `wl_shm`,
 //! `zwp_linux_dmabuf_v1` (version 4, its feedback forwarded), `wp_viewporter`,
-//! `wp_fractional_scale_manager_v1`, `wp_presentation`, `wp_content_type_manager_v1` and
-//! `wp_fifo_manager_v1` when the compositor offers them, each `wl_output` mirrored, and `xdg_wm_base`, which the relay plays
-//! itself ([`shell`]). No seat, subcompositor, data device, idle inhibitor, decoration or sync
-//! object: without `wp_linux_drm_syncobj_manager_v1`, Mesa relies on the dma-bufs' implicit
-//! fences.
+//! `wp_fractional_scale_manager_v1`, `wp_presentation`, `wp_content_type_manager_v1`,
+//! `wp_fifo_manager_v1` and `wp_color_manager_v1` ([`colour`]) when the compositor offers them,
+//! each `wl_output` mirrored, and `xdg_wm_base`, which the relay plays itself ([`shell`]). No
+//! seat, subcompositor, data device, idle inhibitor, decoration or sync object: without
+//! `wp_linux_drm_syncobj_manager_v1`, Mesa relies on the dma-bufs' implicit fences.
 //!
 //! **The plane.** mpv's toplevel surface is shown on a surface the relay made at start: a
 //! subsurface of the window's parent surface, placed below the surface the interface named, its
@@ -45,6 +45,7 @@
 //! [ADR-0015]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0015-a-relay-for-mpvs-wayland-surface.md
 
 mod check;
+mod colour;
 mod host;
 mod rate;
 mod serve;
@@ -70,6 +71,8 @@ use wayland_client::protocol::wl_buffer::WlBuffer as HostBuffer;
 use wayland_client::protocol::wl_output::WlOutput as HostOutput;
 use wayland_client::protocol::wl_surface::WlSurface as HostSurface;
 use wayland_client::{Connection, EventQueue, Proxy, QueueHandle};
+use wayland_protocols::wp::color_management::v1::client::wp_color_management_surface_feedback_v1::WpColorManagementSurfaceFeedbackV1 as HostColourFeedback;
+use wayland_protocols::wp::color_management::v1::client::wp_color_management_surface_v1::WpColorManagementSurfaceV1 as HostColourSurface;
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::WpContentTypeV1 as HostContentType;
 use wayland_protocols::wp::fifo::v1::client::wp_fifo_v1::WpFifoV1 as HostFifo;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::WpFractionalScaleV1 as HostFractionalScale;
@@ -145,6 +148,8 @@ pub(super) struct State {
     feedbacks: Vec<(MpvDmabufFeedback, Option<ObjectId>)>,
     /// mpv's fractional scale objects, and their surface.
     fractional_scales: Vec<(MpvFractionalScale, ObjectId)>,
+    /// mpv's colour-management objects.
+    colour: colour::Colour,
     plane: PlaneState,
     /// mpv's toplevel, the plane's, and the last configure serial sent.
     toplevel: Option<shell::Toplevel>,
@@ -183,6 +188,10 @@ pub(super) struct Host {
     content_type: Option<HostContentType>,
     /// The plane surface's fifo, through which mpv's frames wait for the display's refresh.
     fifo: Option<HostFifo>,
+    /// The plane surface's colour-management surface and colour feedback, each made when first
+    /// needed and kept for the plane's life.
+    colour_surface: Option<HostColourSurface>,
+    colour_feedback: Option<HostColourFeedback>,
     /// The compositor's dmabuf feedback, the default one and the plane surface's, as last sent.
     default_feedback: FeedbackCache,
     surface_feedback: FeedbackCache,
@@ -313,6 +322,7 @@ impl Relay {
             outputs: Vec::new(),
             feedbacks: Vec::new(),
             fractional_scales: Vec::new(),
+            colour: colour::Colour::new(),
             plane: PlaneState::default(),
             toplevel: None,
             serial: 0,
@@ -330,8 +340,11 @@ impl Relay {
         };
         state.watch_outputs(&globals);
         // What the compositor sends in answer to the binds: shared-memory formats, outputs, the
-        // presentation clock, dmabuf feedback. mpv is offered it at once when it binds, so it is
-        // read before mpv may ask; a compositor that dies here fails the start.
+        // presentation clock, dmabuf feedback, what its colour manager advertises. mpv is offered
+        // it at once when it binds, so it is read before mpv may ask; a compositor that dies here
+        // fails the start. The protocols have the compositor send each of these at the bind, so
+        // all of it comes before this round trip's answer: a colour manager that has not said
+        // `done` by then is not offered.
         if let Err(error) = queue.roundtrip(&mut state) {
             state.destroy_host_objects();
             return Err(io::Error::other(format!(
@@ -415,6 +428,18 @@ impl Relay {
     #[cfg(test)]
     pub(crate) fn wake_ups(&self) -> u64 {
         lock(&self.shared).wake_ups
+    }
+
+    /// mpv's objects the relay counts against its ceiling, for the tests.
+    #[cfg(test)]
+    pub(crate) fn objects(&self) -> usize {
+        lock(&self.shared).objects
+    }
+
+    /// The colour descriptions the compositor failed, for the tests until the bench reads them.
+    #[cfg(test)]
+    pub(crate) fn colour_failures(&self) -> u64 {
+        lock(&self.shared).colour.failed
     }
 
     /// Stops the relay's thread, then destroys everything the relay made on the window's
@@ -834,6 +859,12 @@ impl State {
         self.host_buffers.clear();
         for output in self.outputs.drain(..) {
             host::release_output(&output.host);
+        }
+        // A colour description made on the window's connection is destroyed there with its last
+        // holder: each goes now, while the relay's handle on the connection is still open.
+        self.colour.clear();
+        for surface in self.surfaces.values_mut() {
+            surface.forget_colour();
         }
         self.host.destroy();
     }

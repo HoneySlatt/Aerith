@@ -26,6 +26,20 @@ use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop};
+use wayland_protocols::wp::color_management::v1::client::wp_color_management_surface_feedback_v1::{
+    self, WpColorManagementSurfaceFeedbackV1,
+};
+use wayland_protocols::wp::color_management::v1::client::wp_color_management_surface_v1::WpColorManagementSurfaceV1;
+use wayland_protocols::wp::color_management::v1::client::wp_color_manager_v1::{
+    self, Primaries, RenderIntent, TransferFunction, WpColorManagerV1,
+};
+use wayland_protocols::wp::color_management::v1::client::wp_image_description_creator_params_v1::WpImageDescriptionCreatorParamsV1;
+use wayland_protocols::wp::color_management::v1::client::wp_image_description_info_v1::{
+    self, WpImageDescriptionInfoV1,
+};
+use wayland_protocols::wp::color_management::v1::client::wp_image_description_v1::{
+    self, WpImageDescriptionV1,
+};
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_manager_v1::WpContentTypeManagerV1;
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::{self, WpContentTypeV1};
 use wayland_protocols::wp::fifo::v1::client::wp_fifo_manager_v1::WpFifoManagerV1;
@@ -55,7 +69,7 @@ use super::rate::{INTERVALS, SETTLE};
 use super::socket::{MOST_FDS_AT_ONCE, MOST_REGISTRIES, MOST_REQUESTS_AT_ONCE};
 use super::{DisplayNews, MOST_OBJECTS, MOST_QUEUED_FDS, Relay};
 use crate::plane::{DisplayRate, Plane, Window};
-use host::{FakeHost, Interface, OUTPUT_SIZE};
+use host::{BT2020_PRIMARIES, ColourDescription, ColourList, FakeHost, Interface, OUTPUT_SIZE};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -90,6 +104,33 @@ struct Received {
     toplevel: Option<XdgToplevel>,
     /// The toplevel's `xdg_surface`, once configured.
     xdg_surface: Option<XdgSurface>,
+    /// What each binding of the colour manager was offered, by the version it was bound at.
+    colour_offers: std::collections::HashMap<u32, ColourOffered>,
+    /// Each description's `ready` or `ready2`, by the description.
+    ready: Vec<(wayland_client::backend::ObjectId, Identity)>,
+    /// Each description's `failed`: the description, the cause and the message.
+    descriptions_failed: Vec<(wayland_client::backend::ObjectId, u32, String)>,
+    /// Each event of a description's information, by name and values.
+    information: Vec<String>,
+    /// Each `preferred_changed` or `preferred_changed2`.
+    preferred_changes: Vec<Identity>,
+}
+
+/// What a binding of the colour manager was offered, by the protocol's values.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ColourOffered {
+    intents: Vec<u32>,
+    features: Vec<u32>,
+    transfer_functions: Vec<u32>,
+    primaries: Vec<u32>,
+    done: bool,
+}
+
+/// A description's identity, in the form the binding received it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Identity {
+    Version1(u32),
+    Version2(u32, u32),
 }
 
 /// mpv's side: a Wayland client on the relay's socket.
@@ -2451,4 +2492,1139 @@ fn a_probe_asked_after_the_plane_closed_does_nothing() {
     probes(1);
     assert!(news.lock().unwrap().is_empty());
     assert_eq!(plane.presentation().probes_ended, 0);
+}
+
+/// [`shown`], on a fake compositor whose colour manager advertises `list`.
+fn shown_with_colour(
+    list: ColourList,
+) -> (FakeHost, Interface, Plane, FakeMpv, Failures, WlSurface) {
+    let host = FakeHost::start_with_colour(list);
+    let interface = host.connect(true);
+    let (plane, mut mpv, failures) = relay(&interface);
+    plane.place(10, 20, 320, 180).unwrap();
+    plane.show();
+    interface.commit();
+    let (surface, _, _) = mpv.toplevel();
+    (host, interface, plane, mpv, failures, surface)
+}
+
+/// What mpv 0.42 describes for an HDR10 film on an HDR output: PQ and BT.2020, 0 to 10,000 cd/m²
+/// with a reference of 203, the film's mastering display, and its light levels.
+fn hdr() -> ColourDescription {
+    ColourDescription {
+        transfer_function: TransferFunction::St2084Pq.into(),
+        primaries: Primaries::Bt2020.into(),
+        luminances: Some([0, 10_000, 203]),
+        mastering_primaries: Some(BT2020_PRIMARIES),
+        mastering_luminance: Some([50, 1_000]),
+        max_cll: Some(1_000),
+        max_fall: Some(400),
+    }
+}
+
+/// The perceptual intent, as the fake compositor records it.
+const PERCEPTUAL: u32 = 0;
+
+impl FakeMpv {
+    /// The colour manager, bound at `version`.
+    fn colour_manager(&self, version: u32) -> WpColorManagerV1 {
+        self.globals
+            .bind(&self.qh, version..=version, version)
+            .unwrap()
+    }
+
+    /// A parametric creator with each of `description`'s settings set; a transfer function or
+    /// primaries of 0 is left unset.
+    fn creator(
+        &self,
+        manager: &WpColorManagerV1,
+        description: &ColourDescription,
+    ) -> WpImageDescriptionCreatorParamsV1 {
+        let creator = manager.create_parametric_creator(&self.qh, ());
+        if let Ok(tf) = TransferFunction::try_from(description.transfer_function) {
+            creator.set_tf_named(tf);
+        }
+        if let Ok(primaries) = Primaries::try_from(description.primaries) {
+            creator.set_primaries_named(primaries);
+        }
+        if let Some([min, max, reference]) = description.luminances {
+            creator.set_luminances(min, max, reference);
+        }
+        if let Some([r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y]) = description.mastering_primaries {
+            creator.set_mastering_display_primaries(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y);
+        }
+        if let Some([min, max]) = description.mastering_luminance {
+            creator.set_mastering_luminance(min, max);
+        }
+        if let Some(max_cll) = description.max_cll {
+            creator.set_max_cll(max_cll);
+        }
+        if let Some(max_fall) = description.max_fall {
+            creator.set_max_fall(max_fall);
+        }
+        creator
+    }
+
+    /// `description`, created, once the relay answered it.
+    fn describe(
+        &mut self,
+        manager: &WpColorManagerV1,
+        description: &ColourDescription,
+    ) -> WpImageDescriptionV1 {
+        let created = self.creator(manager, description).create(&self.qh, ());
+        let id = created.id();
+        self.wait("the description's answer", |r| r.answered(&id));
+        created
+    }
+
+    /// The information of the preferred description `feedback` gives, asked as mpv 0.42 asks it:
+    /// right after the description, without waiting for it to be ready.
+    fn preferred_information(
+        &mut self,
+        feedback: &WpColorManagementSurfaceFeedbackV1,
+    ) -> Vec<String> {
+        self.received.information.clear();
+        let preferred = feedback.get_preferred(&self.qh, ());
+        preferred.get_information(&self.qh, ());
+        self.wait("the information's end", |r| {
+            r.information.last().is_some_and(|event| event == "done")
+        });
+        preferred.destroy();
+        std::mem::take(&mut self.received.information)
+    }
+}
+
+impl Received {
+    /// Whether the relay answered the description `id`, ready or failed.
+    fn answered(&self, id: &wayland_client::backend::ObjectId) -> bool {
+        self.ready.iter().any(|(ready, _)| ready == id)
+            || self
+                .descriptions_failed
+                .iter()
+                .any(|(failed, ..)| failed == id)
+    }
+
+    /// The identity the description `id` was told.
+    fn identity(&self, id: &wayland_client::backend::ObjectId) -> Option<Identity> {
+        self.ready
+            .iter()
+            .find(|(ready, _)| ready == id)
+            .map(|(_, identity)| *identity)
+    }
+}
+
+/// The colour description the plane's surface holds, and its render intent.
+fn plane_colour(host: &FakeHost, interface: &Interface) -> Option<(ColourDescription, u32)> {
+    host.with(|recorded| interface.plane(recorded).unwrap().colour.clone())
+}
+
+#[test]
+fn mpvs_description_reaches_the_plane_with_mpvs_next_commit_and_not_before() {
+    let (host, mut interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    let manager = mpv.colour_manager(2);
+    let colour_surface = manager.get_surface(&surface, &mpv.qh, ());
+    let description = mpv.describe(&manager, &hdr());
+    colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    assert_eq!(
+        plane_colour(&host, &interface),
+        None,
+        "not before mpv's commit"
+    );
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    host.wait("mpv's description on the plane", |recorded| {
+        interface.plane(recorded)?.colour.clone()
+    });
+    host.with(|recorded| {
+        let plane = interface.plane(recorded).unwrap();
+        assert_eq!(plane.colour, Some((hdr(), PERCEPTUAL)));
+        let log = &plane.log;
+        let frame = log.iter().position(|name| *name == "attach").unwrap();
+        let set = log
+            .iter()
+            .position(|name| *name == "set_image_description")
+            .unwrap();
+        let commit = (frame..log.len()).find(|&i| log[i] == "commit").unwrap();
+        assert!(frame < set && set < commit, "with mpv's frame: {log:?}");
+        assert!(recorded.errors.is_empty(), "{:?}", recorded.errors);
+    });
+}
+
+#[test]
+fn an_unset_reaches_the_plane_with_mpvs_next_commit() {
+    let (host, mut interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    let manager = mpv.colour_manager(2);
+    let colour_surface = manager.get_surface(&surface, &mpv.qh, ());
+    let description = mpv.describe(&manager, &hdr());
+    colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    host.wait("mpv's description", |recorded| {
+        interface.plane(recorded)?.colour.clone()
+    });
+    colour_surface.unset_image_description();
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    assert!(
+        plane_colour(&host, &interface).is_some(),
+        "the unset waits for mpv's commit"
+    );
+    surface.commit();
+    mpv.roundtrip().unwrap();
+    host.wait("the unset on the plane", |recorded| {
+        interface.plane(recorded)?.colour.is_none().then_some(())
+    });
+    // Destroying the colour-management surface unsets too, at the next commit.
+    colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    surface.commit();
+    mpv.roundtrip().unwrap();
+    host.wait("the description again", |recorded| {
+        interface.plane(recorded)?.colour.clone()
+    });
+    colour_surface.destroy();
+    surface.commit();
+    mpv.roundtrip().unwrap();
+    host.wait("the unset of a destroyed surface object", |recorded| {
+        interface.plane(recorded)?.colour.is_none().then_some(())
+    });
+    host.with(|recorded| assert!(recorded.errors.is_empty(), "{:?}", recorded.errors));
+}
+
+#[test]
+fn a_description_mpv_destroys_after_setting_it_still_applies() {
+    let (host, mut interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    let manager = mpv.colour_manager(2);
+    let colour_surface = manager.get_surface(&surface, &mpv.qh, ());
+    let description = mpv.describe(&manager, &hdr());
+    // As mpv does: destroyed as soon as it is set, before the commit.
+    colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    description.destroy();
+    mpv.roundtrip().unwrap();
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    host.wait("the description on the plane", |recorded| {
+        interface.plane(recorded)?.colour.clone()
+    });
+    assert_eq!(plane_colour(&host, &interface), Some((hdr(), PERCEPTUAL)));
+    interface
+        .roundtrip()
+        .expect("the window's connection lives on");
+    host.with(|recorded| assert!(recorded.errors.is_empty(), "{:?}", recorded.errors));
+}
+
+#[test]
+fn a_description_set_while_the_plane_is_hidden_shows_with_it() {
+    let (host, mut interface, plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    plane.hide();
+    let manager = mpv.colour_manager(2);
+    let colour_surface = manager.get_surface(&surface, &mpv.qh, ());
+    let description = mpv.describe(&manager, &hdr());
+    colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    description.destroy();
+    surface.commit();
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    assert_eq!(
+        plane_colour(&host, &interface),
+        None,
+        "hidden, nothing is issued"
+    );
+    plane.show();
+    interface.commit();
+    host.wait("the description once shown", |recorded| {
+        interface.plane(recorded)?.colour.clone()
+    });
+}
+
+#[test]
+fn ready_reaches_a_version_1_binding_as_ready_and_a_version_2_one_as_ready2() {
+    let (host, _interface, plane, mut mpv, _failures, _surface) =
+        shown_with_colour(ColourList::default());
+    // Mesa's binding and mpv's, on one connection.
+    let mesa = mpv.colour_manager(1);
+    let own = mpv.colour_manager(2);
+    let sdr = ColourDescription::sdr();
+    let first = mpv.describe(&mesa, &sdr);
+    let second = mpv.describe(&own, &sdr);
+    // The fake compositor's identities are above 32 bits: (1 << 32) + 1, then + 2. A version-1
+    // binding gets the low half.
+    assert_eq!(
+        mpv.received.identity(&first.id()),
+        Some(Identity::Version1(1))
+    );
+    assert_eq!(
+        mpv.received.identity(&second.id()),
+        Some(Identity::Version2(1, 2))
+    );
+    assert_eq!(plane.relay().colour_failures(), 0);
+    drop(host);
+}
+
+#[test]
+fn a_description_the_compositor_fails_reaches_mpv_with_its_cause_and_is_counted() {
+    let (host, _interface, plane, mut mpv, _failures, _surface) =
+        shown_with_colour(ColourList::default());
+    host.with(|recorded| recorded.descriptions_fail = true);
+    let manager = mpv.colour_manager(2);
+    let description = mpv.describe(&manager, &hdr());
+    let unsupported = u32::from(wp_image_description_v1::Cause::Unsupported);
+    assert_eq!(
+        mpv.received.descriptions_failed,
+        [(
+            description.id(),
+            unsupported,
+            "the fake compositor fails it".to_owned()
+        )]
+    );
+    assert_eq!(plane.relay().colour_failures(), 1);
+}
+
+#[test]
+fn the_preferred_description_and_its_information_reach_mpv() {
+    let (host, _interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    let manager = mpv.colour_manager(2);
+    let feedback = manager.get_surface_feedback(&surface, &mpv.qh, ());
+    let srgb = "640000 330000 300000 600000 150000 60000 312700 329000";
+    assert_eq!(
+        mpv.preferred_information(&feedback),
+        [
+            format!("primaries {srgb}"),
+            "primaries_named 1".to_owned(),
+            "tf_named 2".to_owned(),
+            "luminances 2000 80 80".to_owned(),
+            format!("target_primaries {srgb}"),
+            "target_luminance 2000 80".to_owned(),
+            "done".to_owned(),
+        ],
+        "an SDR output's"
+    );
+    host.change_preferred(ColourDescription::pq());
+    mpv.wait("the change", |r| !r.preferred_changes.is_empty());
+    let bt2020 = "708000 292000 170000 797000 131000 46000 312700 329000";
+    let p3 = "680000 320000 265000 690000 150000 60000 312700 329000";
+    assert_eq!(
+        mpv.preferred_information(&feedback),
+        [
+            format!("primaries {bt2020}"),
+            "primaries_named 6".to_owned(),
+            "tf_named 11".to_owned(),
+            "luminances 50 10000 203".to_owned(),
+            format!("target_primaries {p3}"),
+            "target_luminance 1 1000".to_owned(),
+            "target_max_cll 1000".to_owned(),
+            "target_max_fall 400".to_owned(),
+            "done".to_owned(),
+        ],
+        "an HDR output's"
+    );
+}
+
+#[test]
+fn a_compound_power_transfer_function_reaches_a_version_1_binding_as_srgb() {
+    let (host, _interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    host.with(|recorded| {
+        recorded.preferred = ColourDescription {
+            transfer_function: TransferFunction::CompoundPower24.into(),
+            ..ColourDescription::sdr()
+        };
+    });
+    let mesa = mpv.colour_manager(1);
+    let own = mpv.colour_manager(2);
+    let old = mesa.get_surface_feedback(&surface, &mpv.qh, ());
+    let new = own.get_surface_feedback(&surface, &mpv.qh, ());
+    assert!(
+        mpv.preferred_information(&old)
+            .contains(&"tf_named 9".to_owned())
+    );
+    assert!(
+        mpv.preferred_information(&new)
+            .contains(&"tf_named 14".to_owned())
+    );
+}
+
+#[test]
+fn an_icc_profile_never_reaches_mpv_and_its_file_is_closed() {
+    let (host, mut interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    host.with(|recorded| recorded.preferred_icc = true);
+    let manager = mpv.colour_manager(2);
+    let feedback = manager.get_surface_feedback(&surface, &mpv.qh, ());
+    let information = mpv.preferred_information(&feedback);
+    assert!(
+        !information.contains(&"icc_file".to_owned()),
+        "{information:?}"
+    );
+    interface.roundtrip().unwrap();
+    assert_eq!(open_files_named("fake-icc-profile"), 0);
+}
+
+#[test]
+fn a_preferred_change_reaches_each_binding_in_its_own_form() {
+    let (host, mut interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    let mesa = mpv.colour_manager(1);
+    let own = mpv.colour_manager(2);
+    let _old = mesa.get_surface_feedback(&surface, &mpv.qh, ());
+    let _new = own.get_surface_feedback(&surface, &mpv.qh, ());
+    mpv.roundtrip().unwrap();
+    // The plane's own feedback, which the relay made for mpv's, reaches the compositor.
+    interface.roundtrip().unwrap();
+    host.change_preferred(ColourDescription::pq());
+    mpv.wait("both changes", |r| r.preferred_changes.len() >= 2);
+    let mut changes = mpv.received.preferred_changes.clone();
+    changes.sort_by_key(|change| matches!(change, Identity::Version2(..)));
+    assert_eq!(
+        changes,
+        [Identity::Version1(1), Identity::Version2(1, 1)],
+        "the fake's first identity, (1 << 32) + 1"
+    );
+}
+
+#[test]
+fn srgb_is_never_offered_and_compound_power_only_to_version_2() {
+    let mut list = ColourList::default();
+    list.transfer_functions.extend([
+        u32::from(TransferFunction::Srgb),
+        u32::from(TransferFunction::ExtSrgb),
+    ]);
+    let (_host, _interface, _plane, mut mpv, _failures, _surface) = shown_with_colour(list);
+    let _mesa = mpv.colour_manager(1);
+    let _own = mpv.colour_manager(2);
+    mpv.roundtrip().unwrap();
+    let offered = |version: u32| mpv.received.colour_offers[&version].clone();
+    let (one, two) = (offered(1), offered(2));
+    assert!(one.done && two.done);
+    for srgb in [9, 10] {
+        assert!(!one.transfer_functions.contains(&srgb), "{one:?}");
+        assert!(!two.transfer_functions.contains(&srgb), "{two:?}");
+    }
+    assert!(!one.transfer_functions.contains(&14), "{one:?}");
+    assert!(two.transfer_functions.contains(&14), "{two:?}");
+    let mut sorted = two.transfer_functions.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        sorted,
+        [1, 2, 5, 11, 13, 14],
+        "the compositor's others pass"
+    );
+    assert_eq!(two.intents, [PERCEPTUAL]);
+    assert_eq!(two.primaries, [1, 6, 9]);
+}
+
+#[test]
+fn set_luminances_is_offered_only_when_the_compositor_has_it() {
+    let features_offered = |list: ColourList| {
+        let (_host, _interface, _plane, mut mpv, _failures, _surface) = shown_with_colour(list);
+        let _manager = mpv.colour_manager(2);
+        mpv.roundtrip().unwrap();
+        mpv.received.colour_offers[&2].features.clone()
+    };
+    // Parametric, set_luminances, set_mastering_display_primaries.
+    assert_eq!(features_offered(ColourList::default()), [1, 4, 5]);
+    let without = ColourList {
+        features: vec![1, 5],
+        ..ColourList::default()
+    };
+    assert_eq!(features_offered(without), [1, 5]);
+}
+
+#[test]
+fn the_switch_that_withholds_set_luminances_withholds_it() {
+    let (host, mut interface, plane, mut mpv, failures, _surface) =
+        shown_with_colour(ColourList::default());
+    plane
+        .relay()
+        .change(|state| state.colour.offer_set_luminances = false);
+    let manager = mpv.colour_manager(2);
+    mpv.roundtrip().unwrap();
+    assert_eq!(mpv.received.colour_offers[&2].features, [1, 5]);
+    // Sent all the same, it is refused.
+    let creator = manager.create_parametric_creator(&mpv.qh, ());
+    creator.set_luminances(0, 10_000, 203);
+    let _ = mpv.roundtrip();
+    ended_mpv_only(
+        &host,
+        &mut interface,
+        &mut mpv,
+        &failures,
+        "set_luminances was not offered",
+    );
+}
+
+#[test]
+fn without_a_colour_manager_mpv_is_offered_none_and_its_frames_show() {
+    let (host, interface, _plane, mut mpv, _failures, surface) = shown();
+    assert!(
+        !mpv.global_names()
+            .contains(&"wp_color_manager_v1".to_owned()),
+        "{:?}",
+        mpv.global_names()
+    );
+    let buffer = mpv.shm_buffer(64, 48);
+    mpv.draw(&surface, &buffer);
+    host.wait("mpv's frame on the plane", |recorded| {
+        (interface.plane(recorded)?.buffer_commits >= 1).then_some(())
+    });
+}
+
+#[test]
+fn colour_on_another_surface_of_mpvs_is_kept_and_never_issued() {
+    let (host, mut interface, _plane, mut mpv, failures, _surface) =
+        shown_with_colour(ColourList::default());
+    let compositor: WlCompositor = mpv.bind(6);
+    let other = compositor.create_surface(&mpv.qh, ());
+    let manager = mpv.colour_manager(2);
+    let colour_surface = manager.get_surface(&other, &mpv.qh, ());
+    let description = mpv.describe(&manager, &hdr());
+    colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    other.commit();
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    host.with(|recorded| {
+        let plane = interface.plane(recorded).unwrap();
+        assert_eq!(plane.colour, None);
+        assert!(
+            !plane.log.contains(&"set_image_description"),
+            "{:?}",
+            plane.log
+        );
+    });
+    // Checked all the same.
+    colour_surface.set_image_description(&description, RenderIntent::Relative);
+    let _ = mpv.roundtrip();
+    ended_mpv_only(
+        &host,
+        &mut interface,
+        &mut mpv,
+        &failures,
+        "render intent 1",
+    );
+}
+
+#[test]
+fn colour_objects_count_against_the_ceiling_of_objects() {
+    let (host, mut interface, plane, mut mpv, failures, surface) =
+        shown_with_colour(ColourList::default());
+    let before = plane.relay().objects();
+    let manager = mpv.colour_manager(2);
+    let colour_surface = manager.get_surface(&surface, &mpv.qh, ());
+    let feedback = manager.get_surface_feedback(&surface, &mpv.qh, ());
+    let preferred = feedback.get_preferred(&mpv.qh, ());
+    preferred.get_information(&mpv.qh, ());
+    mpv.wait("the information's end", |r| {
+        r.information.last().is_some_and(|event| event == "done")
+    });
+    // The information object went with its `done`, which the relay sent from the compositor's
+    // event: the server lets it go at its next dispatch of mpv's requests, before it answers this
+    // round trip.
+    mpv.roundtrip().unwrap();
+    assert_eq!(plane.relay().objects(), before + 4);
+    let created = mpv.describe(&manager, &ColourDescription::sdr());
+    assert_eq!(
+        plane.relay().objects(),
+        before + 5,
+        "the creator gone with its create"
+    );
+    for object in [&preferred, &created] {
+        object.destroy();
+    }
+    feedback.destroy();
+    colour_surface.destroy();
+    manager.destroy();
+    mpv.roundtrip().unwrap();
+    assert_eq!(plane.relay().objects(), before);
+    // And past the ceiling, mpv's connection ends.
+    let manager = mpv.colour_manager(2);
+    let mut creators = Vec::new();
+    while creators.len() <= MOST_OBJECTS {
+        for _ in 0..MOST_REQUESTS_AT_ONCE / 4 {
+            creators.push(manager.create_parametric_creator(&mpv.qh, ()));
+        }
+        if mpv.roundtrip().is_err() {
+            break;
+        }
+    }
+    ended_mpv_only(&host, &mut interface, &mut mpv, &failures, "objects");
+}
+
+/// Proves that what `send` has mpv send, on a plane whose compositor advertises `list`, ends mpv's
+/// connection only, for a reason that holds `expected`.
+fn refused_with(list: ColourList, expected: &str, send: impl FnOnce(&mut FakeMpv, &WlSurface)) {
+    let (host, mut interface, _plane, mut mpv, failures, surface) = shown_with_colour(list);
+    send(&mut mpv, &surface);
+    let _ = mpv.roundtrip();
+    ended_mpv_only(&host, &mut interface, &mut mpv, &failures, expected);
+}
+
+/// [`refused_with`], on the fake compositor's usual list.
+fn refused(expected: &str, send: impl FnOnce(&mut FakeMpv, &WlSurface)) {
+    refused_with(ColourList::default(), expected, send);
+}
+
+#[test]
+fn a_description_without_its_transfer_function_or_primaries_ends_mpv_only() {
+    refused("no transfer function was set", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let missing = ColourDescription {
+            transfer_function: 0,
+            ..hdr()
+        };
+        mpv.creator(&manager, &missing).create(&mpv.qh, ());
+    });
+    refused("no primaries were set", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let missing = ColourDescription {
+            primaries: 0,
+            ..hdr()
+        };
+        mpv.creator(&manager, &missing).create(&mpv.qh, ());
+    });
+}
+
+#[test]
+fn each_property_set_twice_ends_mpv_only() {
+    type Set = fn(&WpImageDescriptionCreatorParamsV1);
+    let sets: [(&str, Set); 7] = [
+        ("the transfer function", |creator| {
+            creator.set_tf_named(TransferFunction::Gamma22);
+        }),
+        ("the primaries", |creator| {
+            creator.set_primaries_named(Primaries::Srgb);
+        }),
+        ("the luminances", |creator| {
+            creator.set_luminances(0, 100, 80);
+        }),
+        ("the mastering display's primaries", |creator| {
+            let [r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y] = BT2020_PRIMARIES;
+            creator.set_mastering_display_primaries(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y);
+        }),
+        ("the mastering luminance", |creator| {
+            creator.set_mastering_luminance(50, 1_000);
+        }),
+        ("max_cll", |creator| creator.set_max_cll(1_000)),
+        ("max_fall", |creator| creator.set_max_fall(400)),
+    ];
+    for (what, set) in sets {
+        refused(&format!("{what} set twice"), |mpv, _| {
+            let manager = mpv.colour_manager(2);
+            let creator = manager.create_parametric_creator(&mpv.qh, ());
+            set(&creator);
+            set(&creator);
+        });
+    }
+}
+
+#[test]
+fn a_transfer_function_not_offered_ends_mpv_only() {
+    let mut list = ColourList::default();
+    list.transfer_functions.push(TransferFunction::Srgb.into());
+    // srgb, though the compositor has it.
+    refused_with(list, "transfer function 9 was not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let creator = manager.create_parametric_creator(&mpv.qh, ());
+        creator.set_tf_named(TransferFunction::Srgb);
+    });
+    // compound_power_2_4, to a version-1 binding.
+    refused("transfer function 14 was not offered", |mpv, _| {
+        let manager = mpv.colour_manager(1);
+        let creator = manager.create_parametric_creator(&mpv.qh, ());
+        creator.set_tf_named(TransferFunction::CompoundPower24);
+    });
+    // gamma 2.8, which the compositor does not have.
+    refused("transfer function 3 was not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let creator = manager.create_parametric_creator(&mpv.qh, ());
+        creator.set_tf_named(TransferFunction::Gamma28);
+    });
+}
+
+#[test]
+fn named_primaries_not_offered_end_mpv_only() {
+    refused("primaries 4 were not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let creator = manager.create_parametric_creator(&mpv.qh, ());
+        creator.set_primaries_named(Primaries::Ntsc);
+    });
+}
+
+#[test]
+fn luminances_whose_maximum_or_reference_lie_at_their_minimum_end_mpv_only() {
+    // A minimum of 1 cd/m², in 1/10,000 cd/m².
+    for (max, reference) in [(1, 203), (10_000, 1)] {
+        refused("must lie above the minimum", |mpv, _| {
+            let manager = mpv.colour_manager(2);
+            let creator = manager.create_parametric_creator(&mpv.qh, ());
+            creator.set_luminances(10_000, max, reference);
+        });
+    }
+}
+
+#[test]
+fn a_mastering_luminance_whose_maximum_lies_at_its_minimum_ends_mpv_only() {
+    refused("mastering luminance: maximum", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let creator = manager.create_parametric_creator(&mpv.qh, ());
+        creator.set_mastering_luminance(10_000, 1);
+    });
+}
+
+#[test]
+fn a_max_fall_above_max_cll_ends_mpv_only() {
+    refused("max_fall 1000 lies above max_cll 400", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let levels = ColourDescription {
+            max_cll: Some(400),
+            max_fall: Some(1_000),
+            ..hdr()
+        };
+        mpv.creator(&manager, &levels).create(&mpv.qh, ());
+    });
+}
+
+#[test]
+fn at_version_1_light_levels_outside_the_mastering_range_end_mpv_only() {
+    let above_mastering = ColourDescription {
+        max_cll: Some(2_000),
+        ..hdr()
+    };
+    let max_cll = above_mastering.clone();
+    refused("at version 1, max_cll 2000", move |mpv, _| {
+        let manager = mpv.colour_manager(1);
+        mpv.creator(&manager, &max_cll).create(&mpv.qh, ());
+    });
+    refused("at version 1, max_fall 1500", |mpv, _| {
+        let manager = mpv.colour_manager(1);
+        let max_fall = ColourDescription {
+            max_cll: Some(0),
+            max_fall: Some(1_500),
+            ..hdr()
+        };
+        mpv.creator(&manager, &max_fall).create(&mpv.qh, ());
+    });
+    // Version 2 has no such rule.
+    let (_host, _interface, _plane, mut mpv, _failures, _surface) =
+        shown_with_colour(ColourList::default());
+    let manager = mpv.colour_manager(2);
+    let description = mpv.describe(&manager, &above_mastering);
+    assert!(mpv.received.identity(&description.id()).is_some());
+    // Nor version 1 without a mastering luminance, as wlroots checks nothing then.
+    let manager = mpv.colour_manager(1);
+    let without_mastering = ColourDescription {
+        mastering_luminance: None,
+        ..above_mastering
+    };
+    let description = mpv.describe(&manager, &without_mastering);
+    assert!(mpv.received.identity(&description.id()).is_some());
+}
+
+#[test]
+fn luminances_whose_minimum_rounds_to_their_maximum_end_mpv_only() {
+    // 2,000 cd/m² lies above 1,999.9999 exactly, but not in wlroots' and Umbriel's f32, where
+    // 19,999,999 rounds to 20,000,000. Whole descriptions, created: a value the relay let through
+    // would reach the fake compositor, which decodes it as they do.
+    refused("must lie above the minimum", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let rounded = ColourDescription {
+            luminances: Some([19_999_999, 2_000, 2_000]),
+            ..hdr()
+        };
+        mpv.creator(&manager, &rounded).create(&mpv.qh, ());
+    });
+    refused("mastering luminance: maximum", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let rounded = ColourDescription {
+            mastering_luminance: Some([19_999_999, 2_000]),
+            ..hdr()
+        };
+        mpv.creator(&manager, &rounded).create(&mpv.qh, ());
+    });
+}
+
+#[test]
+fn a_preferred_description_that_fails_after_mpv_asked_its_information_ends_mpv_only() {
+    let (host, mut interface, _plane, mut mpv, failures, surface) =
+        shown_with_colour(ColourList::default());
+    host.with(|recorded| recorded.preferred_fails = true);
+    let manager = mpv.colour_manager(2);
+    let feedback = manager.get_surface_feedback(&surface, &mpv.qh, ());
+    // As mpv 0.42 asks: the information at once, held by the relay until the compositor answers.
+    let preferred = feedback.get_preferred(&mpv.qh, ());
+    preferred.get_information(&mpv.qh, ());
+    let _ = mpv.roundtrip();
+    ended_mpv_only(
+        &host,
+        &mut interface,
+        &mut mpv,
+        &failures,
+        "get_information on a description that then failed",
+    );
+    host.with(|recorded| assert_eq!(recorded.information_asked, 0));
+}
+
+#[test]
+fn information_waiting_for_a_description_mpv_destroys_ends_empty() {
+    let (host, mut interface, _plane, mut mpv, _failures, surface) =
+        shown_with_colour(ColourList::default());
+    let manager = mpv.colour_manager(2);
+    let feedback = manager.get_surface_feedback(&surface, &mpv.qh, ());
+    // Sent together: the relay holds the information, and the description goes before the
+    // compositor answers it.
+    let preferred = feedback.get_preferred(&mpv.qh, ());
+    preferred.get_information(&mpv.qh, ());
+    preferred.destroy();
+    mpv.wait("the information's end", |r| {
+        r.information.last().is_some_and(|event| event == "done")
+    });
+    assert_eq!(mpv.received.information, ["done"]);
+    mpv.roundtrip().unwrap();
+    interface.roundtrip().unwrap();
+    host.with(|recorded| {
+        assert_eq!(
+            recorded.information_asked, 0,
+            "nothing asked of the compositor"
+        );
+        assert!(recorded.errors.is_empty(), "{:?}", recorded.errors);
+    });
+}
+
+#[test]
+fn a_mastering_display_not_offered_ends_mpv_only() {
+    let without = || ColourList {
+        features: vec![1, 4],
+        ..ColourList::default()
+    };
+    refused_with(
+        without(),
+        "set_mastering_display_primaries was not offered",
+        |mpv, _| {
+            let manager = mpv.colour_manager(2);
+            let creator = manager.create_parametric_creator(&mpv.qh, ());
+            let [r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y] = BT2020_PRIMARIES;
+            creator.set_mastering_display_primaries(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y);
+        },
+    );
+    refused_with(
+        without(),
+        "set_mastering_luminance was not offered",
+        |mpv, _| {
+            let manager = mpv.colour_manager(2);
+            let creator = manager.create_parametric_creator(&mpv.qh, ());
+            creator.set_mastering_luminance(50, 1_000);
+        },
+    );
+}
+
+#[test]
+fn mastering_primaries_outside_a_chromaticitys_range_end_mpv_only() {
+    for coordinate in [-1, 1_000_001] {
+        refused("lie outside 0 to 1000000", |mpv, _| {
+            let manager = mpv.colour_manager(2);
+            let creator = manager.create_parametric_creator(&mpv.qh, ());
+            let [r_x, r_y, g_x, g_y, b_x, b_y, w_x, _] = BT2020_PRIMARIES;
+            creator.set_mastering_display_primaries(r_x, r_y, g_x, g_y, b_x, b_y, w_x, coordinate);
+        });
+    }
+}
+
+#[test]
+fn a_render_intent_not_offered_ends_mpv_only() {
+    refused("render intent 1 was not offered", |mpv, surface| {
+        let manager = mpv.colour_manager(2);
+        let colour_surface = manager.get_surface(surface, &mpv.qh, ());
+        let description = mpv.describe(&manager, &hdr());
+        colour_surface.set_image_description(&description, RenderIntent::Relative);
+    });
+}
+
+#[test]
+fn setting_a_description_not_ready_ends_mpv_only() {
+    // Set before the relay could answer it: the compositor has not said ready.
+    refused("a description that is not ready", |mpv, surface| {
+        let manager = mpv.colour_manager(2);
+        let colour_surface = manager.get_surface(surface, &mpv.qh, ());
+        let description = mpv.creator(&manager, &hdr()).create(&mpv.qh, ());
+        colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    });
+}
+
+#[test]
+fn setting_a_description_that_failed_ends_mpv_only() {
+    let (host, mut interface, _plane, mut mpv, failures, surface) =
+        shown_with_colour(ColourList::default());
+    host.with(|recorded| recorded.descriptions_fail = true);
+    let manager = mpv.colour_manager(2);
+    let colour_surface = manager.get_surface(&surface, &mpv.qh, ());
+    let description = mpv.describe(&manager, &hdr());
+    colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    let _ = mpv.roundtrip();
+    ended_mpv_only(
+        &host,
+        &mut interface,
+        &mut mpv,
+        &failures,
+        "a description that is not ready",
+    );
+}
+
+#[test]
+fn what_is_never_offered_ends_mpv_only() {
+    refused("create_icc_creator is not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        manager.create_icc_creator(&mpv.qh, ());
+    });
+    refused("create_windows_scrgb is not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        manager.create_windows_scrgb(&mpv.qh, ());
+    });
+    refused("get_output is not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let output: WlOutput = mpv.bind(4);
+        manager.get_output(&output, &mpv.qh, ());
+    });
+    refused("set_tf_power was not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let creator = manager.create_parametric_creator(&mpv.qh, ());
+        creator.set_tf_power(22_000);
+    });
+    refused("set_primaries was not offered", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let creator = manager.create_parametric_creator(&mpv.qh, ());
+        let [r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y] = BT2020_PRIMARIES;
+        creator.set_primaries(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y);
+    });
+}
+
+#[test]
+fn a_second_colour_surface_for_a_surface_ends_mpv_only() {
+    // Mesa's binding and mpv's, each asking for the same surface.
+    refused("a colour-management surface already", |mpv, surface| {
+        let mesa = mpv.colour_manager(1);
+        let own = mpv.colour_manager(2);
+        let _first = mesa.get_surface(surface, &mpv.qh, ());
+        let _second = own.get_surface(surface, &mpv.qh, ());
+    });
+}
+
+#[test]
+fn requests_on_an_inert_colour_surface_end_mpv_only() {
+    refused("surface was destroyed", |mpv, _| {
+        let compositor: WlCompositor = mpv.bind(6);
+        let other = compositor.create_surface(&mpv.qh, ());
+        let manager = mpv.colour_manager(2);
+        let colour_surface = manager.get_surface(&other, &mpv.qh, ());
+        other.destroy();
+        colour_surface.unset_image_description();
+    });
+    refused("surface was destroyed", |mpv, _| {
+        let compositor: WlCompositor = mpv.bind(6);
+        let other = compositor.create_surface(&mpv.qh, ());
+        let manager = mpv.colour_manager(2);
+        let colour_surface = manager.get_surface(&other, &mpv.qh, ());
+        let description = mpv.describe(&manager, &hdr());
+        other.destroy();
+        colour_surface.set_image_description(&description, RenderIntent::Perceptual);
+    });
+    refused("colour feedback's surface was destroyed", |mpv, _| {
+        let compositor: WlCompositor = mpv.bind(6);
+        let other = compositor.create_surface(&mpv.qh, ());
+        let manager = mpv.colour_manager(2);
+        let feedback = manager.get_surface_feedback(&other, &mpv.qh, ());
+        other.destroy();
+        feedback.get_preferred(&mpv.qh, ());
+    });
+}
+
+#[test]
+fn information_on_mpvs_own_description_or_one_that_failed_ends_mpv_only() {
+    refused("mpv's own description", |mpv, _| {
+        let manager = mpv.colour_manager(2);
+        let description = mpv.describe(&manager, &hdr());
+        description.get_information(&mpv.qh, ());
+    });
+    let (host, mut interface, _plane, mut mpv, failures, _surface) =
+        shown_with_colour(ColourList::default());
+    host.with(|recorded| recorded.descriptions_fail = true);
+    let manager = mpv.colour_manager(2);
+    let description = mpv.describe(&manager, &hdr());
+    description.get_information(&mpv.qh, ());
+    let _ = mpv.roundtrip();
+    ended_mpv_only(
+        &host,
+        &mut interface,
+        &mut mpv,
+        &failures,
+        "a description that failed",
+    );
+}
+
+impl Dispatch<WpColorManagerV1, u32> for Received {
+    fn event(
+        received: &mut Self,
+        _: &WpColorManagerV1,
+        event: wp_color_manager_v1::Event,
+        version: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wp_color_manager_v1::Event;
+        let offered = received.colour_offers.entry(*version).or_default();
+        match event {
+            Event::SupportedIntent { render_intent } => {
+                offered.intents.push(enum_value(render_intent));
+            }
+            Event::SupportedFeature { feature } => offered.features.push(enum_value(feature)),
+            Event::SupportedTfNamed { tf } => offered.transfer_functions.push(enum_value(tf)),
+            Event::SupportedPrimariesNamed { primaries } => {
+                offered.primaries.push(enum_value(primaries));
+            }
+            Event::Done => offered.done = true,
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpImageDescriptionV1, ()> for Received {
+    fn event(
+        received: &mut Self,
+        description: &WpImageDescriptionV1,
+        event: wp_image_description_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wp_image_description_v1::Event;
+        let id = description.id();
+        match event {
+            Event::Ready { identity } => received.ready.push((id, Identity::Version1(identity))),
+            Event::Ready2 {
+                identity_hi,
+                identity_lo,
+            } => received
+                .ready
+                .push((id, Identity::Version2(identity_hi, identity_lo))),
+            Event::Failed { cause, msg } => {
+                received
+                    .descriptions_failed
+                    .push((id, enum_value(cause), msg));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpImageDescriptionInfoV1, ()> for Received {
+    fn event(
+        received: &mut Self,
+        _: &WpImageDescriptionInfoV1,
+        event: wp_image_description_info_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wp_image_description_info_v1::Event;
+        let words = |values: &[i64]| {
+            values
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let line = match event {
+            Event::Done => "done".to_owned(),
+            Event::IccFile { .. } => "icc_file".to_owned(),
+            Event::Primaries {
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                w_x,
+                w_y,
+            } => format!(
+                "primaries {}",
+                words(&[r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y].map(i64::from))
+            ),
+            Event::PrimariesNamed { primaries } => {
+                format!("primaries_named {}", enum_value(primaries))
+            }
+            Event::TfPower { eexp } => format!("tf_power {eexp}"),
+            Event::TfNamed { tf } => format!("tf_named {}", enum_value(tf)),
+            Event::Luminances {
+                min_lum,
+                max_lum,
+                reference_lum,
+            } => format!("luminances {min_lum} {max_lum} {reference_lum}"),
+            Event::TargetPrimaries {
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                w_x,
+                w_y,
+            } => format!(
+                "target_primaries {}",
+                words(&[r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y].map(i64::from))
+            ),
+            Event::TargetLuminance { min_lum, max_lum } => {
+                format!("target_luminance {min_lum} {max_lum}")
+            }
+            Event::TargetMaxCll { max_cll } => format!("target_max_cll {max_cll}"),
+            Event::TargetMaxFall { max_fall } => format!("target_max_fall {max_fall}"),
+            _ => return,
+        };
+        received.information.push(line);
+    }
+}
+
+impl Dispatch<WpColorManagementSurfaceFeedbackV1, ()> for Received {
+    fn event(
+        received: &mut Self,
+        _: &WpColorManagementSurfaceFeedbackV1,
+        event: wp_color_management_surface_feedback_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wp_color_management_surface_feedback_v1::Event;
+        match event {
+            Event::PreferredChanged { identity } => {
+                received
+                    .preferred_changes
+                    .push(Identity::Version1(identity));
+            }
+            Event::PreferredChanged2 {
+                identity_hi,
+                identity_lo,
+            } => received
+                .preferred_changes
+                .push(Identity::Version2(identity_hi, identity_lo)),
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(Received: WpImageDescriptionCreatorParamsV1);
+delegate_noop!(Received: WpColorManagementSurfaceV1);
+delegate_noop!(Received: wayland_protocols::wp::color_management::v1::client::wp_image_description_creator_icc_v1::WpImageDescriptionCreatorIccV1);
+delegate_noop!(Received: ignore wayland_protocols::wp::color_management::v1::client::wp_color_management_output_v1::WpColorManagementOutputV1);
+
+/// The value of an enum the relay sent, known to the client library or not.
+fn enum_value<T: Into<u32>>(value: WEnum<T>) -> u32 {
+    match value {
+        WEnum::Value(value) => value.into(),
+        WEnum::Unknown(value) => value,
+    }
 }

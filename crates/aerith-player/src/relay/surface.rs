@@ -27,6 +27,12 @@
 //! **Buffers.** A buffer of mpv's is released to mpv when no surface of mpv's holds it any more
 //! and the compositor has released it too. The buffer on screen when the plane is hidden is kept
 //! that way, and shown again when the plane is shown, without mpv drawing again.
+//!
+//! **Colour.** The description mpv sets on its surface, or unsets, is part of its pending state
+//! ([`super::colour`]). At mpv's commit it becomes the surface's, and when it differs from what
+//! the plane's own colour-management surface holds, the relay sets it there, or unsets it, before
+//! the plane's commit. The surface holds the description made on the window's connection until it
+//! is replaced, so that mpv may destroy its own before its commit.
 
 use std::mem;
 
@@ -46,6 +52,7 @@ use wayland_server::protocol::wl_surface::{self, WlSurface};
 use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, New, Resource};
 
 use super::check::{self, CommitState, Source};
+use super::colour::SetDescription;
 use super::host::{FeedbackEvent, FeedbackKind, HostCallback, replay_feedback};
 use super::rate::Timed;
 use super::{Buffer, Made, State};
@@ -78,10 +85,13 @@ pub(super) struct Surface {
     pub(super) has_fractional_scale: bool,
     pub(super) has_content_type: bool,
     pub(super) has_fifo: bool,
+    pub(super) has_colour_surface: bool,
     /// What mpv's fifo asked with the last commit, until it is issued on the plane: a barrier
     /// set, and a wait for the barrier before.
     fifo_barrier: bool,
     fifo_wait: bool,
+    /// The colour description mpv last committed, `None` for none.
+    colour: Option<SetDescription>,
     /// The shell role mpv gave it: the relay plays `xdg_wm_base`, and its one toplevel is the
     /// plane's.
     pub(super) xdg_surface: Option<XdgSurface>,
@@ -103,6 +113,7 @@ struct Pending {
     opaque_region: Option<Option<Region>>,
     fifo_barrier: bool,
     fifo_wait: bool,
+    colour: Option<Option<SetDescription>>,
 }
 
 impl Surface {
@@ -126,8 +137,10 @@ impl Surface {
             has_fractional_scale: false,
             has_content_type: false,
             has_fifo: false,
+            has_colour_surface: false,
             fifo_barrier: false,
             fifo_wait: false,
+            colour: None,
             xdg_surface: None,
             toplevel: false,
         }
@@ -160,6 +173,17 @@ impl Surface {
 
     pub(super) fn wait_fifo_barrier(&mut self) {
         self.pending.fifo_wait = true;
+    }
+
+    /// Sets the colour description for the next commit, or unsets it with `None`.
+    pub(super) fn set_colour(&mut self, colour: Option<SetDescription>) {
+        self.pending.colour = Some(colour);
+    }
+
+    /// Lets go of the descriptions the surface holds: the plane closes.
+    pub(super) fn forget_colour(&mut self) {
+        self.colour = None;
+        self.pending.colour = None;
     }
 }
 
@@ -259,6 +283,8 @@ struct Issued {
     content_type: u32,
     /// Whether the plane's whole surface is said to be opaque.
     opaque: bool,
+    /// The colour description set on the plane's surface, by [`SetDescription::key`].
+    colour: Option<(u64, u32)>,
 }
 
 impl Default for PlaneState {
@@ -280,6 +306,7 @@ impl Default for PlaneState {
                 destination: None,
                 content_type: 0,
                 opaque: false,
+                colour: None,
             },
             change: 0,
             enters_held: false,
@@ -477,6 +504,9 @@ impl State {
         if let Some(region) = pending.opaque_region {
             surface.opaque_region = region;
         }
+        if let Some(colour) = pending.colour {
+            surface.colour = colour;
+        }
         // Fifo requests belong to this commit only.
         surface.fifo_barrier = pending.fifo_barrier;
         surface.fifo_wait = pending.fifo_wait;
@@ -572,6 +602,7 @@ impl State {
         self.sync_plane_for(origin, host_buffer.is_some());
         self.attach_owed_buffer(&id, host_buffer, next.buffer);
         self.issue_surface_state(&id);
+        self.issue_colour(&id);
         self.issue_fifo(&id);
         self.issue_frame_requests(&id);
         if origin == Origin::Interface && self.plane.sync {
@@ -683,6 +714,27 @@ impl State {
             }
             issued.opaque = surface.opaque;
         }
+    }
+
+    /// Issues the colour description of mpv's surface `id` on the plane's own colour-management
+    /// surface, if the plane holds another: a set, or an unset. The compositor copies the
+    /// description at the set; the relay's may go once issued.
+    fn issue_colour(&mut self, id: &ObjectId) {
+        let Some(surface) = self.surfaces.get(id) else {
+            return;
+        };
+        let held = surface.colour.as_ref().map(SetDescription::key);
+        if held == self.plane.issued.colour {
+            return;
+        }
+        let Some(colour_surface) = self.host.plane_colour_surface(&self.qh) else {
+            return;
+        };
+        match &surface.colour {
+            Some(colour) => colour.issue(colour_surface),
+            None => colour_surface.unset_image_description(),
+        }
+        self.plane.issued.colour = held;
     }
 
     /// Issues the fifo requests mpv made with its commit on the plane's own fifo, once. While the

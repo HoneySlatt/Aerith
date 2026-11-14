@@ -6,15 +6,19 @@
 //! interface's (place, show, hide, commit).
 //!
 //! Each input runs a whole session: the fake compositor of the player's tests
-//! (`tests/common/host.rs`) and an interface connected to it, the relay on the interface's window,
-//! and mpv's end of the relay's socket. A prelude first makes what mpv makes (every global bound,
-//! a toplevel configured, a frame on the plane, a viewport), so that the input starts from mpv's
-//! usual state; the input's messages follow.
+//! (`tests/common/host.rs`), with a colour manager, and an interface connected to it, the relay on
+//! the interface's window, and mpv's end of the relay's socket. A prelude first makes what mpv
+//! makes (every global bound, a toplevel configured, a frame on the plane, a viewport, a colour
+//! description set on the plane), so that the input starts from mpv's usual state; the input's
+//! messages follow.
 //!
 //! What must hold, whatever the input: nothing panics, in any thread (libFuzzer aborts the
 //! process on a panic); the relay reads mpv's socket to its end and closes it, or closes it
 //! before; and the interface's connection lives on, the fake compositor having raised no error on
-//! it, during the session and after the plane is closed.
+//! it, during the session and after the plane is closed. The prelude must work too: a prelude the
+//! relay refuses, as when the relay's globals change their order, would leave every input to a
+//! closed connection, so the session fails at once if its colour description never becomes
+//! ready.
 
 #![no_main]
 
@@ -30,17 +34,19 @@ use std::mem::MaybeUninit;
 use std::net::Shutdown;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
+use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use aerith_player::{Plane, Window};
-use host::{FakeHost, Interface};
+use host::{ColourList, FakeHost, Interface};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|input: &[u8]| session(input));
 
 /// One session: the prelude, then each step of `input`, then the end of mpv's socket.
 fn session(input: &[u8]) {
-    let host = FakeHost::start();
+    let host = FakeHost::start_with_colour(ColourList::default());
     // The interface's own subsurface or none: the plane goes below it, or below the parent.
     let mut interface = host.connect(input.first().is_some_and(|byte| byte & 1 == 1));
     let (relay_end, mpv_end) = UnixStream::pair().expect("a socket pair");
@@ -53,9 +59,14 @@ fn session(input: &[u8]) {
     plane.place(10, 20, 320, 180).expect("a valid place");
     plane.show();
     interface.commit();
-    let reader = read_to_end(&mpv_end);
+    let (reader, ready) = read_to_end(&mpv_end, DESCRIPTION);
     let mut mpv = Mpv { socket: mpv_end };
     let mut sent = mpv.prelude();
+    assert!(
+        ready.recv_timeout(PRELUDE_WAIT).is_ok(),
+        "the prelude's colour description never became ready: the relay refused the prelude"
+    );
+    sent &= mpv.set_description();
     for step in steps(input.get(1..).unwrap_or_default()) {
         if !sent {
             break;
@@ -82,13 +93,42 @@ fn session(input: &[u8]) {
     host.with(|recorded| assert!(recorded.errors.is_empty(), "{:?}", recorded.errors));
 }
 
-/// Reads what the relay sends mpv until it closes mpv's end.
-fn read_to_end(socket: &UnixStream) -> JoinHandle<()> {
+/// How long the prelude waits for its colour description: the relay and the fake compositor
+/// answer within milliseconds.
+const PRELUDE_WAIT: Duration = Duration::from_secs(5);
+
+/// Reads what the relay sends mpv until it closes mpv's end, and tells, once, when the
+/// description `watched` is ready (`ready` or `ready2`, opcodes 1 and 2).
+fn read_to_end(socket: &UnixStream, watched: u32) -> (JoinHandle<()>, Receiver<()>) {
     let mut reader = socket.try_clone().expect("a second handle on mpv's end");
-    thread::spawn(move || {
+    let (tell, ready) = mpsc::channel();
+    let thread = thread::spawn(move || {
         let mut bytes = [0; 65536];
-        while let Ok(1..) = reader.read(&mut bytes) {}
-    })
+        // What was read of the message under way.
+        let mut stream = Vec::new();
+        while let Ok(count @ 1..) = reader.read(&mut bytes) {
+            stream.extend_from_slice(&bytes[..count]);
+            // Each message: the object's id, then its size, header included, over its opcode.
+            while let Some(&[a, b, c, d, e, f, g, h]) = stream.first_chunk::<8>() {
+                let object = u32::from_ne_bytes([a, b, c, d]);
+                let word = u32::from_ne_bytes([e, f, g, h]);
+                let size = usize::try_from(word >> 16).expect("a 16-bit size");
+                if size < 8 {
+                    // Not a message: the rest is only drained.
+                    stream.clear();
+                    break;
+                }
+                if stream.len() < size {
+                    break;
+                }
+                if object == watched && matches!(word & 0xffff, 1 | 2) {
+                    let _ = tell.send(());
+                }
+                stream.drain(..size);
+            }
+        }
+    });
+    (thread, ready)
 }
 
 /// A change of the interface's, made while mpv's messages flow.
@@ -138,11 +178,21 @@ enum Step {
     Message(Message),
 }
 
+/// The ids of the prelude's colour objects: the colour-management surface of mpv's surface, its
+/// feedback, a parametric creator, and the description it creates.
+const COLOUR_SURFACE: u32 = 20;
+const FEEDBACK: u32 = 21;
+const CREATOR: u32 = 22;
+const DESCRIPTION: u32 = 23;
+
+/// mpv's surface.
+const SURFACE: u32 = 14;
+
 /// The first id the prelude leaves free.
-const FIRST_FREE_ID: u32 = 18;
+const FIRST_FREE_ID: u32 = 24;
 
 /// The steps an input holds, each a header of four bytes and the words it announces:
-/// - byte 0: the object, 1 to 47, or 0 for a change of the interface's;
+/// - byte 0: the object, 1 to 47, or 0 for a change of the interface's; the prelude made 1 to 23;
 /// - byte 1: the opcode, or the kind of change;
 /// - byte 2: how many words of arguments follow, up to 8;
 /// - byte 3: a file descriptor sent with the message (bits 0-1: none, a memory file, a sealed one,
@@ -213,12 +263,14 @@ enum Arg<'a> {
 
 impl Mpv {
     /// Makes what mpv makes at its start: every global bound, a toplevel configured with a frame
-    /// of 64x48 on it, a viewport. Returns whether the socket took it all.
+    /// of 64x48 on it, a viewport, and a colour-management surface, a feedback and an HDR
+    /// description, as mpv 0.42 makes them. Returns whether the socket took it all.
     fn prelude(&mut self) -> bool {
         use Arg::{Text, Word};
         let mut sent = self.raw(1, 1, &[Word(2)], None); // wl_display.get_registry
-        // The relay's globals, by their names, in the order it makes them, bound from id 3: the
-        // output first, as the compositor tells of it while the relay starts.
+        // The relay's globals, by their names, in the order it makes them (`offer_globals`),
+        // bound from id 3: the output first, as the compositor tells of it while the relay
+        // starts.
         let globals = [
             ("wl_output", 4),
             ("wl_compositor", 6),
@@ -228,6 +280,8 @@ impl Mpv {
             ("wp_presentation", 2),
             ("wp_fractional_scale_manager_v1", 1),
             ("wp_content_type_manager_v1", 1),
+            ("wp_fifo_manager_v1", 1),
+            ("wp_color_manager_v1", 2),
             ("xdg_wm_base", 6),
         ];
         for (name, (interface, version)) in (1..).zip(globals) {
@@ -240,8 +294,9 @@ impl Mpv {
                 None,
             );
         }
-        let (compositor, shm, viewporter, shell) = (4, 5, 7, 11);
-        let (surface, xdg_surface, toplevel, pool, buffer, viewport) = (12, 13, 14, 15, 16, 17);
+        let (compositor, shm, viewporter, colour, shell) = (4, 5, 7, 12, 13);
+        let surface = SURFACE;
+        let (xdg_surface, toplevel, pool, buffer, viewport) = (15, 16, 17, 18, 19);
         sent &= self.raw(compositor, 0, &[Word(surface)], None); // create_surface
         sent &= self.raw(shell, 2, &[Word(xdg_surface), Word(surface)], None); // get_xdg_surface
         sent &= self.raw(xdg_surface, 1, &[Word(toplevel)], None); // get_toplevel
@@ -262,6 +317,34 @@ impl Mpv {
         sent &= self.raw(viewporter, 1, &[Word(viewport), Word(surface)], None); // get_viewport
         sent &= self.raw(surface, 1, &[Word(buffer), Word(0), Word(0)], None); // attach
         sent &= self.raw(surface, 6, &[], None); // commit
+        sent &= self.raw(colour, 2, &[Word(COLOUR_SURFACE), Word(surface)], None); // get_surface
+        // get_surface_feedback
+        sent &= self.raw(colour, 3, &[Word(FEEDBACK), Word(surface)], None);
+        sent &= self.raw(colour, 5, &[Word(CREATOR)], None); // create_parametric_creator
+        // PQ, BT.2020, 0 to 10,000 cd/m² with a reference of 203, the mastering display, MaxCLL
+        // and MaxFALL.
+        sent &= self.raw(CREATOR, 1, &[Word(11)], None); // set_tf_named
+        sent &= self.raw(CREATOR, 3, &[Word(6)], None); // set_primaries_named
+        sent &= self.raw(CREATOR, 5, &[0, 10_000, 203].map(Word), None); // set_luminances
+        let bt2020 = [
+            708_000, 292_000, 170_000, 797_000, 131_000, 46_000, 312_700, 329_000,
+        ];
+        // set_mastering_display_primaries
+        sent &= self.raw(CREATOR, 6, &bt2020.map(Word), None);
+        sent &= self.raw(CREATOR, 7, &[50, 1_000].map(Word), None); // set_mastering_luminance
+        sent &= self.raw(CREATOR, 8, &[Word(1_000)], None); // set_max_cll
+        sent &= self.raw(CREATOR, 9, &[Word(400)], None); // set_max_fall
+        sent &= self.raw(CREATOR, 0, &[Word(DESCRIPTION)], None); // create
+        sent
+    }
+
+    /// Sets the prelude's description, ready, on mpv's surface, and commits it. Returns whether
+    /// the socket took it.
+    fn set_description(&mut self) -> bool {
+        use Arg::Word;
+        // set_image_description, perceptual
+        let mut sent = self.raw(COLOUR_SURFACE, 1, &[Word(DESCRIPTION), Word(0)], None);
+        sent &= self.raw(SURFACE, 6, &[], None); // commit
         sent
     }
 

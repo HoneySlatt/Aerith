@@ -4,11 +4,14 @@
 //! The checks the relay makes on mpv's values before it issues anything on the window's
 //! connection: each refuses what wlroots 0.20 (the base of Umbriel, the owner's compositor) would
 //! raise as a protocol error, which would close the whole connection, and some more that the relay
-//! can tell cheaply. A refusal ends mpv's connection, never the window's.
+//! can tell cheaply. Colour management's checks are the union of what wlroots 0.20, Umbriel,
+//! KWin 6.8 and Yuna refuse ([ADR-0024]). A refusal ends mpv's connection, never the window's.
 //!
-//! Each function names the wlroots code it mirrors. They take plain values and file descriptors,
-//! so that they are tested apart from any connection. The relay's fuzz target (`fuzz/`) reaches
-//! them through mpv's requests.
+//! Each function names the code it mirrors. They take plain values and file descriptors, so that
+//! they are tested apart from any connection. The relay's fuzz target (`fuzz/`) reaches them
+//! through mpv's requests.
+//!
+//! [ADR-0024]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0024-the-relay-passes-mpvs-colour-description.md
 
 use std::os::fd::{AsFd, BorrowedFd};
 
@@ -553,6 +556,329 @@ pub(super) fn dmabuf_create(
     Ok(())
 }
 
+/// What one of mpv's bindings of `wp_color_manager_v1` was offered: the values its requests may
+/// use. Each set holds a bit for each value of the protocol's enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ColourOffer {
+    /// The version mpv bound.
+    pub(super) version: u32,
+    pub(super) intents: u32,
+    pub(super) transfer_functions: u32,
+    pub(super) primaries: u32,
+    /// Whether the features `set_luminances` and `set_mastering_display_primaries` were offered;
+    /// the second offers `set_mastering_luminance` too.
+    pub(super) set_luminances: bool,
+    pub(super) mastering: bool,
+}
+
+/// Whether a set of values, a bit for each, holds `value`. No value of the protocol's enums
+/// reaches 32.
+pub(super) fn holds(set: u32, value: u32) -> bool {
+    value < 32 && set & (1 << value) != 0
+}
+
+/// A parametric image description as mpv sets it on its creator, until it creates it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Parametric {
+    pub(super) transfer_function: Option<u32>,
+    pub(super) primaries: Option<u32>,
+    /// The primary colour volume's minimum in 1/10,000 cd/m², its maximum and reference white in
+    /// cd/m², as the protocol carries them.
+    pub(super) luminances: Option<(u32, u32, u32)>,
+    /// Red, green, blue and white, x then y, each times 1,000,000.
+    pub(super) mastering_primaries: Option<[i32; 8]>,
+    /// The minimum in 1/10,000 cd/m², the maximum in cd/m².
+    pub(super) mastering_luminance: Option<(u32, u32)>,
+    pub(super) max_cll: Option<u32>,
+    pub(super) max_fall: Option<u32>,
+}
+
+/// One of mpv's requests on a parametric creator, `create` apart, with its values.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ParametricSet {
+    TransferFunction(u32),
+    /// `set_tf_power`, never offered.
+    TransferPower,
+    Primaries(u32),
+    /// `set_primaries`, never offered.
+    PrimaryCoordinates,
+    Luminances {
+        min: u32,
+        max: u32,
+        reference: u32,
+    },
+    MasteringPrimaries([i32; 8]),
+    MasteringLuminance {
+        min: u32,
+        max: u32,
+    },
+    MaxCll(u32),
+    MaxFall(u32),
+}
+
+/// The error codes of `wp_image_description_creator_params_v1`, by name.
+#[derive(Clone, Copy)]
+pub(super) struct CreatorErrors {
+    pub(super) incomplete_set: u32,
+    pub(super) already_set: u32,
+    pub(super) unsupported_feature: u32,
+    pub(super) invalid_tf: u32,
+    pub(super) invalid_primaries_named: u32,
+    pub(super) invalid_luminance: u32,
+}
+
+/// The largest chromaticity coordinate, 1.0, times 1,000,000.
+const MOST_COORDINATE: i32 = 1_000_000;
+
+/// One request of mpv's on a parametric creator, `create` apart, checked against what its binding
+/// was `offer`ed and what the creator holds, then kept in `description`. Each refusal is a
+/// compositor's, quoted from wlroots 0.20.2's colour manager, Umbriel `d171ccb`'s
+/// (`src/server/color_manager.cpp`) and KWin 6.8.2's (`src/wayland/colormanagement_v1.cpp`):
+/// - any property set twice: `already_set` (wlroots "transfer function already set", and the
+///   same for the primaries and the mastering display; KWin also for `set_max_cll` and
+///   `set_max_fall`, "max_cll is already set", "max_fall is already set");
+/// - a transfer function or named primaries not offered: `invalid_tf`, `invalid_primaries_named`
+///   (wlroots "invalid transfer function", "invalid primaries"; KWin "unsupported named transfer
+///   function" for `srgb`);
+/// - `set_tf_power`, `set_primaries`, and `set_luminances` or the mastering display unless
+///   offered: `unsupported_feature` (wlroots "set_tf_power is not supported", "set_primaries is
+///   not supported", "set_luminances is not supported", and the mastering requests while the
+///   feature is off);
+/// - luminances whose maximum or reference is at or below the minimum: `invalid_luminance` (the
+///   protocol's `set_luminances`: "If 'max_lum' or 'reference_lum' are less than or equal to
+///   'min_lum', the protocol error invalid_luminance is raised"; Umbriel "maximum and reference
+///   luminance must exceed minimum luminance");
+/// - a mastering luminance whose maximum is at or below its minimum, which counts in 1/10,000
+///   cd/m²: `invalid_luminance` (wlroots "max luminance must be greater than min luminance";
+///   Umbriel "maximum mastering luminance must exceed minimum mastering luminance");
+/// - mastering primaries outside 0.0 to 1.0, the range of a CIE 1931 chromaticity coordinate,
+///   which the protocol carries times 1,000,000: no compositor read was found to refuse them, but
+///   the relay sends none it cannot place; the protocol names no code, and
+///   `invalid_primaries_named` is the closest.
+///
+/// Luminances are compared twice, and refused when either comparison refuses them ([`at_or_below`]):
+/// exactly, in 64 bits, where no product of the protocol's 32-bit values overflows, and as wlroots
+/// and Umbriel compare them, in `f32`.
+pub(super) fn parametric_set(
+    description: &mut Parametric,
+    set: ParametricSet,
+    offer: &ColourOffer,
+    errors: CreatorErrors,
+) -> Result<(), Refusal> {
+    let refuse = |code: u32, message: String| Err(Refusal::new(code, message));
+    let twice = |what: &str| {
+        refuse(
+            errors.already_set,
+            format!("wp_image_description_creator_params_v1: {what} set twice"),
+        )
+    };
+    let not_offered = |what: &str| {
+        refuse(
+            errors.unsupported_feature,
+            format!("wp_image_description_creator_params_v1.{what} was not offered"),
+        )
+    };
+    match set {
+        ParametricSet::TransferFunction(tf) => {
+            if description.transfer_function.is_some() {
+                return twice("the transfer function");
+            }
+            if !holds(offer.transfer_functions, tf) {
+                return refuse(
+                    errors.invalid_tf,
+                    format!("transfer function {tf} was not offered"),
+                );
+            }
+            description.transfer_function = Some(tf);
+        }
+        ParametricSet::TransferPower => return not_offered("set_tf_power"),
+        ParametricSet::Primaries(primaries) => {
+            if description.primaries.is_some() {
+                return twice("the primaries");
+            }
+            if !holds(offer.primaries, primaries) {
+                return refuse(
+                    errors.invalid_primaries_named,
+                    format!("primaries {primaries} were not offered"),
+                );
+            }
+            description.primaries = Some(primaries);
+        }
+        ParametricSet::PrimaryCoordinates => return not_offered("set_primaries"),
+        ParametricSet::Luminances {
+            min,
+            max,
+            reference,
+        } => {
+            if !offer.set_luminances {
+                return not_offered("set_luminances");
+            }
+            if description.luminances.is_some() {
+                return twice("the luminances");
+            }
+            if at_or_below(max, min) || at_or_below(reference, min) {
+                return refuse(
+                    errors.invalid_luminance,
+                    format!(
+                        "luminances: maximum {max} and reference {reference} cd/m² must lie \
+                         above the minimum {min} × 0.0001 cd/m²"
+                    ),
+                );
+            }
+            description.luminances = Some((min, max, reference));
+        }
+        ParametricSet::MasteringPrimaries(coordinates) => {
+            if !offer.mastering {
+                return not_offered("set_mastering_display_primaries");
+            }
+            if description.mastering_primaries.is_some() {
+                return twice("the mastering display's primaries");
+            }
+            if coordinates
+                .iter()
+                .any(|coordinate| !(0..=MOST_COORDINATE).contains(coordinate))
+            {
+                return refuse(
+                    errors.invalid_primaries_named,
+                    format!(
+                        "the mastering display's primaries {coordinates:?} lie outside 0 to \
+                         {MOST_COORDINATE}"
+                    ),
+                );
+            }
+            description.mastering_primaries = Some(coordinates);
+        }
+        ParametricSet::MasteringLuminance { min, max } => {
+            if !offer.mastering {
+                return not_offered("set_mastering_luminance");
+            }
+            if description.mastering_luminance.is_some() {
+                return twice("the mastering luminance");
+            }
+            if at_or_below(max, min) {
+                return refuse(
+                    errors.invalid_luminance,
+                    format!(
+                        "mastering luminance: maximum {max} cd/m² must lie above the minimum \
+                         {min} × 0.0001 cd/m²"
+                    ),
+                );
+            }
+            description.mastering_luminance = Some((min, max));
+        }
+        ParametricSet::MaxCll(max_cll) => {
+            if description.max_cll.is_some() {
+                return twice("max_cll");
+            }
+            description.max_cll = Some(max_cll);
+        }
+        ParametricSet::MaxFall(max_fall) => {
+            if description.max_fall.is_some() {
+                return twice("max_fall");
+            }
+            description.max_fall = Some(max_fall);
+        }
+    }
+    Ok(())
+}
+
+/// Whether a luminance in cd/m² lies at or below a minimum in 1/10,000 cd/m², exactly or as the
+/// compositors compute it. wlroots 0.20.2 (`types/wlr_color_management_v1.c`,
+/// `image_desc_creator_params_handle_set_mastering_luminance`) and Umbriel `d171ccb`
+/// (`src/server/color_manager.cpp`, `handleParametricSetLuminances` and
+/// `handleParametricSetMasteringLuminance`) decode the minimum in `f32` and compare there:
+/// `const float min = static_cast<float>(minimum) / 10000.0F;`
+/// `if (static_cast<float>(maximum) <= min || …`. Rounded so, a minimum of 19,999,999 becomes
+/// 2,000 cd/m², and a maximum of 2,000 is refused, though it lies above the exact minimum.
+fn at_or_below(luminance: u32, minimum: u32) -> bool {
+    let exactly = u64::from(luminance) * 10_000 <= u64::from(minimum);
+    exactly || as_compositors_decode(luminance) <= decoded_minimum(minimum)
+}
+
+/// A luminance in cd/m², in `f32`, as C converts a `uint32_t` to `float`: to the nearest, ties to
+/// even, which Rust's cast does too.
+fn as_compositors_decode(luminance: u32) -> f32 {
+    // The loss of precision is the point: it is the compositors' own.
+    luminance as f32
+}
+
+/// A minimum in 1/10,000 cd/m², decoded as wlroots and Umbriel decode it: `(float)min / 10000`.
+fn decoded_minimum(minimum: u32) -> f32 {
+    as_compositors_decode(minimum) / 10_000.0
+}
+
+/// A parametric creator's `create`, for a creator of a binding at `version`, as wlroots 0.20.2's
+/// colour manager refuses it:
+/// - without a transfer function or primaries: `incomplete_set` ("missing transfer function",
+///   "missing primaries");
+/// - `max_fall` above `max_cll`, both above 0: `invalid_luminance` ("max_fall must be less or
+///   equal to max_cll");
+/// - at version 1 only, with a mastering luminance set, `max_cll` or `max_fall` above 0 and
+///   outside its range, that is not above its minimum or above its maximum: `invalid_luminance`
+///   (`if (version < 2 && (!check_mastering_luminance_range(…`, "max_cll must be greater than min
+///   L of the mastering luminance range", "…less or equal to max L…"; the protocol's `create`: "In
+///   version 1, these following conditions also result in the invalid_luminance protocol
+///   error"). Compared exactly and in `f32`, as wlroots compares a `float` value with the decoded
+///   range ([`outside_mastering_range`]).
+///
+/// wlroots is the one compositor with the version-1 rule, and checks nothing without a mastering
+/// luminance or for a value of 0: `if (!data->has_mastering_luminance || value == 0) { return
+/// true; }`. The relay refuses no more. A value of 0 is unknown (CTA-861-H), and mpv 0.42 sends 0
+/// for a value out of that range at version 1 (`cm_metadata_sanitize`), expecting it to pass.
+pub(super) fn parametric_create(
+    description: &Parametric,
+    version: u32,
+    errors: CreatorErrors,
+) -> Result<(), Refusal> {
+    if description.transfer_function.is_none() {
+        return Err(Refusal::new(
+            errors.incomplete_set,
+            "wp_image_description_creator_params_v1.create: no transfer function was set",
+        ));
+    }
+    if description.primaries.is_none() {
+        return Err(Refusal::new(
+            errors.incomplete_set,
+            "wp_image_description_creator_params_v1.create: no primaries were set",
+        ));
+    }
+    let max_cll = description.max_cll.unwrap_or(0);
+    let max_fall = description.max_fall.unwrap_or(0);
+    if max_cll != 0 && max_fall != 0 && max_fall > max_cll {
+        return Err(Refusal::new(
+            errors.invalid_luminance,
+            format!("max_fall {max_fall} lies above max_cll {max_cll}"),
+        ));
+    }
+    if version < 2
+        && let Some((min, max)) = description.mastering_luminance
+    {
+        for (name, value) in [("max_cll", max_cll), ("max_fall", max_fall)] {
+            if value != 0 && outside_mastering_range(value, min, max) {
+                return Err(Refusal::new(
+                    errors.invalid_luminance,
+                    format!(
+                        "at version 1, {name} {value} cd/m² lies outside the mastering \
+                         luminance range, {min} × 0.0001 to {max} cd/m²"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a light level in cd/m² lies outside a mastering range whose minimum counts in 1/10,000
+/// cd/m² and whose maximum in cd/m²: not above the minimum, or above the maximum. Exactly, or as
+/// wlroots computes it, in `f32` (`check_mastering_luminance_range`, with `float value`:
+/// `if (value <= data->mastering_luminance.min)`, `if (value > data->mastering_luminance.max)`,
+/// the range decoded as `(float)min_lum / 10000` and `max_lum`).
+fn outside_mastering_range(value: u32, min: u32, max: u32) -> bool {
+    let exactly = u64::from(value) * 10_000 <= u64::from(min) || value > max;
+    let level = as_compositors_decode(value);
+    exactly || level <= decoded_minimum(min) || level > as_compositors_decode(max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,5 +1195,258 @@ mod tests {
         );
         let (socket, _other) = std::os::unix::net::UnixStream::pair().unwrap();
         assert!(dmabuf_size(&socket, 6, true).is_err());
+    }
+
+    const CREATOR: CreatorErrors = CreatorErrors {
+        incomplete_set: 10,
+        already_set: 11,
+        unsupported_feature: 12,
+        invalid_tf: 13,
+        invalid_primaries_named: 14,
+        invalid_luminance: 15,
+    };
+
+    /// The transfer function PQ (`st2084_pq`).
+    const ST2084_PQ: u32 = 11;
+
+    /// gamma22 and PQ, sRGB and BT.2020 primaries, both features.
+    fn offer(version: u32) -> ColourOffer {
+        ColourOffer {
+            version,
+            intents: 1,
+            transfer_functions: (1 << 2) | (1 << ST2084_PQ),
+            primaries: (1 << 1) | (1 << 6),
+            set_luminances: true,
+            mastering: true,
+        }
+    }
+
+    /// The code of the first refusal of `sets`, made in order on one creator, then of its
+    /// creation, if all passed.
+    fn refusal(sets: &[ParametricSet], offer: &ColourOffer) -> Option<u32> {
+        let mut description = Parametric::default();
+        for set in sets {
+            if let Err(refusal) = parametric_set(&mut description, *set, offer, CREATOR) {
+                return Some(refusal.code);
+            }
+        }
+        parametric_create(&description, offer.version, CREATOR)
+            .err()
+            .map(|refusal| refusal.code)
+    }
+
+    use ParametricSet::{
+        Luminances, MasteringLuminance, MasteringPrimaries, MaxCll, MaxFall, Primaries,
+        TransferFunction,
+    };
+
+    const PQ: [ParametricSet; 2] = [TransferFunction(ST2084_PQ), Primaries(6)];
+
+    #[test]
+    fn mpvs_hdr_description_passes() {
+        let mut sets = PQ.to_vec();
+        sets.extend([
+            Luminances {
+                min: 0,
+                max: 10_000,
+                reference: 203,
+            },
+            MasteringPrimaries([
+                708_000, 292_000, 170_000, 797_000, 131_000, 46_000, 312_700, 329_000,
+            ]),
+            MasteringLuminance { min: 50, max: 1000 },
+            MaxCll(1000),
+            MaxFall(0),
+        ]);
+        assert_eq!(refusal(&sets, &offer(2)), None);
+        assert_eq!(
+            refusal(&sets, &offer(1)),
+            None,
+            "within the mastering range"
+        );
+    }
+
+    #[test]
+    fn each_property_is_set_once() {
+        for set in [
+            TransferFunction(2),
+            Primaries(1),
+            Luminances {
+                min: 0,
+                max: 100,
+                reference: 80,
+            },
+            MasteringPrimaries([0; 8]),
+            MasteringLuminance { min: 0, max: 100 },
+            MaxCll(100),
+            MaxFall(100),
+        ] {
+            assert_eq!(refusal(&[set, set], &offer(2)), Some(11), "{set:?}");
+        }
+    }
+
+    #[test]
+    fn only_what_was_offered_is_set() {
+        assert_eq!(refusal(&[TransferFunction(9)], &offer(2)), Some(13));
+        assert_eq!(refusal(&[TransferFunction(0)], &offer(2)), Some(13));
+        assert_eq!(refusal(&[TransferFunction(u32::MAX)], &offer(2)), Some(13));
+        assert_eq!(refusal(&[Primaries(9)], &offer(2)), Some(14));
+        assert_eq!(
+            refusal(&[ParametricSet::TransferPower], &offer(2)),
+            Some(12)
+        );
+        assert_eq!(
+            refusal(&[ParametricSet::PrimaryCoordinates], &offer(2)),
+            Some(12)
+        );
+        let bare = ColourOffer {
+            set_luminances: false,
+            mastering: false,
+            ..offer(2)
+        };
+        let luminances = Luminances {
+            min: 0,
+            max: 100,
+            reference: 80,
+        };
+        assert_eq!(refusal(&[luminances], &bare), Some(12));
+        assert_eq!(refusal(&[MasteringPrimaries([0; 8])], &bare), Some(12));
+        assert_eq!(
+            refusal(&[MasteringLuminance { min: 0, max: 100 }], &bare),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn luminances_lie_above_their_minimum_whatever_their_size() {
+        let refused = |min, max, reference| {
+            let mut sets = PQ.to_vec();
+            sets.push(Luminances {
+                min,
+                max,
+                reference,
+            });
+            refusal(&sets, &offer(2))
+        };
+        assert_eq!(refused(10_000, 1, 2), Some(15), "a maximum at the minimum");
+        assert_eq!(
+            refused(10_000, 2, 1),
+            Some(15),
+            "a reference at the minimum"
+        );
+        assert_eq!(refused(10_001, 2, 2), None);
+        assert_eq!(refused(u32::MAX, u32::MAX, u32::MAX), None, "no overflow");
+        assert_eq!(refused(u32::MAX, 429_496, 429_497), Some(15));
+        let mastering = |min, max| {
+            let mut sets = PQ.to_vec();
+            sets.push(MasteringLuminance { min, max });
+            refusal(&sets, &offer(2))
+        };
+        assert_eq!(mastering(0, 0), Some(15));
+        assert_eq!(mastering(10_000, 1), Some(15));
+        assert_eq!(mastering(9_999, 1), None);
+        assert_eq!(mastering(u32::MAX, u32::MAX), None);
+    }
+
+    #[test]
+    fn luminances_are_refused_where_the_compositors_rounding_refuses_them() {
+        // 2,000 cd/m² lies above 1,999.9999 exactly, but 19,999,999 rounds to 20,000,000 in f32,
+        // which wlroots and Umbriel then compare with 2,000.0.
+        assert!(at_or_below(2_000, 19_999_999));
+        assert!(!at_or_below(2_001, 19_999_999));
+        let mut sets = PQ.to_vec();
+        sets.push(Luminances {
+            min: 19_999_999,
+            max: 2_000,
+            reference: 2_000,
+        });
+        assert_eq!(refusal(&sets, &offer(2)), Some(15));
+        let mut sets = PQ.to_vec();
+        sets.push(MasteringLuminance {
+            min: 19_999_999,
+            max: 2_000,
+        });
+        assert_eq!(refusal(&sets, &offer(2)), Some(15));
+    }
+
+    #[test]
+    fn mastering_primaries_are_chromaticities() {
+        let primaries = |coordinates| {
+            let mut sets = PQ.to_vec();
+            sets.push(MasteringPrimaries(coordinates));
+            refusal(&sets, &offer(2))
+        };
+        assert_eq!(primaries([1_000_000; 8]), None);
+        assert_eq!(primaries([0; 8]), None);
+        let mut negative = [0; 8];
+        negative[7] = -1;
+        assert_eq!(primaries(negative), Some(14));
+        assert_eq!(primaries([1_000_001; 8]), Some(14));
+        assert_eq!(primaries([i32::MIN; 8]), Some(14));
+    }
+
+    #[test]
+    fn a_creation_needs_its_transfer_function_and_primaries_and_a_max_fall_within_max_cll() {
+        assert_eq!(refusal(&[Primaries(1)], &offer(2)), Some(10));
+        assert_eq!(refusal(&[TransferFunction(2)], &offer(2)), Some(10));
+        let with = |cll, fall| {
+            let mut sets = PQ.to_vec();
+            sets.extend([MaxCll(cll), MaxFall(fall)]);
+            refusal(&sets, &offer(2))
+        };
+        assert_eq!(with(400, 401), Some(15));
+        assert_eq!(with(400, 400), None);
+        assert_eq!(with(0, 401), None, "an unknown max_cll bounds nothing");
+        assert_eq!(with(400, 0), None);
+    }
+
+    #[test]
+    fn at_version_1_max_cll_and_max_fall_lie_in_the_mastering_range() {
+        let at = |version, sets: &[ParametricSet]| {
+            let mut all = PQ.to_vec();
+            all.extend_from_slice(sets);
+            refusal(&all, &offer(version))
+        };
+        let mastering = MasteringLuminance { min: 50, max: 1000 };
+        assert_eq!(at(1, &[mastering, MaxCll(1001)]), Some(15));
+        assert_eq!(
+            at(2, &[mastering, MaxCll(1001)]),
+            None,
+            "version 2 has no such rule"
+        );
+        assert_eq!(at(1, &[mastering, MaxFall(1001)]), Some(15));
+        assert_eq!(at(1, &[mastering, MaxCll(1000), MaxFall(1)]), None);
+        // A minimum of 1 cd/m²: a max_cll of 1 does not lie above it.
+        let high_floor = MasteringLuminance {
+            min: 10_000,
+            max: 1000,
+        };
+        assert_eq!(at(1, &[high_floor, MaxCll(1)]), Some(15));
+        assert_eq!(at(1, &[high_floor, MaxCll(0)]), None, "0 is unknown");
+        // 2,000 lies above 1,999.9999 cd/m² exactly, not in wlroots' f32.
+        let rounded_floor = MasteringLuminance {
+            min: 19_999_999,
+            max: 3000,
+        };
+        assert_eq!(at(1, &[rounded_floor, MaxCll(2001)]), None);
+        assert_eq!(at(1, &[rounded_floor, MaxCll(2000)]), Some(15));
+    }
+
+    #[test]
+    fn at_version_1_without_a_mastering_luminance_light_levels_are_free() {
+        let luminances = Luminances {
+            min: 10_000,
+            max: 80,
+            reference: 80,
+        };
+        for sets in [
+            vec![MaxCll(u32::MAX)],
+            vec![MaxCll(1), MaxFall(1)],
+            vec![luminances, MaxCll(10_002), MaxFall(5)],
+        ] {
+            let mut all = PQ.to_vec();
+            all.extend(sets);
+            assert_eq!(refusal(&all, &offer(1)), None, "{all:?}");
+        }
     }
 }

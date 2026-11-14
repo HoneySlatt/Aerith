@@ -108,6 +108,21 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   interface drawing. A place, show or hide of the interface's that changes the plane's own state
   while it shows switches it to synchronized, so that the change appears with the interface's
   next commit; once the compositor drew it, the surface runs desynchronized again.
+- mpv describes its picture's colours through the relay
+  ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md); `src/relay/colour.rs`).
+  When the compositor has `wp_color_manager_v1` with parametric descriptions, mpv is offered it,
+  at version 2 at most, with the render intents, transfer functions and primaries the compositor
+  advertises, but never the `srgb` transfer function, so that Mesa never describes mpv's surface
+  behind mpv. Each setting of a description is checked as it comes against the union of what
+  wlroots 0.20, Umbriel, KWin 6.8 and Yuna refuse; at its creation, the relay makes the
+  description again on the window's connection, and passes the compositor's `ready` or `failed`
+  back to mpv, in the form each binding knows: Mesa binds version 1 on mpv's connection, mpv
+  version 2. A failed description is counted. The description mpv sets on its surface goes with
+  mpv's commit, set on the plane's own colour-management surface before the plane's commit; the
+  relay keeps it alive until then, as mpv destroys its own as soon as it set it. mpv's preferred
+  description is the plane's: it comes, with its changes and its information, from the
+  compositor's feedback on the plane's surface, translated to mpv's version; an ICC profile is
+  never passed on.
 - The relay's thread, `aerith-relay`, sleeps in `poll` on mpv's socket, the socket pair to its
   server, the window's connection and a stop signal. It follows libwayland's protocol for a
   connection read by several threads: prepare, poll, then read or cancel at once, so that the

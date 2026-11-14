@@ -2,15 +2,17 @@
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! mpv's side of the relay: the globals mpv is offered, and every request of mpv's but its
-//! surfaces' ([`super::surface`]) and its shell's ([`super::shell`]). Each request was counted at
-//! mpv's socket already ([`super::socket`]); here each object it makes, and each file it hands
-//! over, is counted against the ceilings, the request checked ([`super::check`]), and then either
-//! kept in the relay or issued again on the window's connection.
+//! surfaces' ([`super::surface`]), its shell's ([`super::shell`]) and colour management's
+//! ([`super::colour`]). Each request was counted at mpv's socket already ([`super::socket`]); here
+//! each object it makes, and each file it hands over, is counted against the ceilings, the request
+//! checked ([`super::check`]), and then either kept in the relay or issued again on the window's
+//! connection.
 
 use std::os::fd::AsFd;
 
 use wayland_client::Proxy;
 use wayland_client::protocol::wl_shm::Format as HostFormat;
+use wayland_protocols::wp::color_management::v1::server::wp_color_manager_v1::WpColorManagerV1;
 use wayland_protocols::wp::content_type::v1::server::wp_content_type_manager_v1::{
     self, WpContentTypeManagerV1,
 };
@@ -46,6 +48,7 @@ use wayland_server::{
 };
 
 use super::check::{self, ParamsErrors};
+use super::colour::{self, Advertised, Offer};
 use super::host::OutputInfo;
 use super::surface::{Region, Surface, new_feedback};
 use super::{Buffer, Made, Params, ParamsUse, Pool, State};
@@ -88,6 +91,16 @@ impl State {
         }
         if globals.fifo.is_some() {
             display.create_global::<State, WpFifoManagerV1, ()>(1, ());
+        }
+        if let Some(host_colour) = globals
+            .colour
+            .as_ref()
+            .filter(|host_colour| Offer::offered(&host_colour.advertised))
+        {
+            display.create_global::<State, WpColorManagerV1, Advertised>(
+                host_colour.manager.version().min(colour::VERSION),
+                host_colour.advertised,
+            );
         }
         display.create_global::<State, XdgWmBase, ()>(XDG_WM_BASE, ());
         let complete: Vec<u32> = self
@@ -187,20 +200,22 @@ fn send_output_state(resource: &WlOutput, info: &OutputInfo) {
     }
 }
 
-/// Binds a global's object for mpv, against the ceiling of objects.
-fn bind<I: Resource + 'static>(
+/// Makes an object for mpv with `data`, against the ceiling of objects: `None` once mpv's
+/// connection is ended for breaking it.
+pub(super) fn admit<I: Resource + 'static, U: Send + Sync + 'static>(
     state: &mut State,
     client: &Client,
     resource: New<I>,
+    data: U,
     data_init: &mut DataInit<'_, State>,
 ) -> Option<I>
 where
-    State: Dispatch<I, ()>,
+    State: Dispatch<I, U>,
 {
     if !state.admit_object(client) {
         return None;
     }
-    Some(data_init.init(resource, ()))
+    Some(data_init.init(resource, data))
 }
 
 /// Counts the end of an object of mpv's whose death needs nothing else.
@@ -221,7 +236,7 @@ impl GlobalDispatch<WlCompositor, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        bind(state, client, resource, data_init);
+        admit(state, client, resource, (), data_init);
     }
 }
 
@@ -300,7 +315,7 @@ impl GlobalDispatch<WlShm, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        let Some(shm) = bind(state, client, resource, data_init) else {
+        let Some(shm) = admit(state, client, resource, (), data_init) else {
             return;
         };
         for format in &state.host.globals.shm_formats {
@@ -471,7 +486,7 @@ impl GlobalDispatch<ZwpLinuxDmabufV1, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        bind(state, client, resource, data_init);
+        admit(state, client, resource, (), data_init);
     }
 }
 
@@ -718,7 +733,7 @@ impl GlobalDispatch<WpViewporter, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        bind(state, client, resource, data_init);
+        admit(state, client, resource, (), data_init);
     }
 }
 
@@ -817,7 +832,7 @@ impl GlobalDispatch<WpPresentation, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        let Some(presentation) = bind(state, client, resource, data_init) else {
+        let Some(presentation) = admit(state, client, resource, (), data_init) else {
             return;
         };
         if let Some(clock) = state.host.globals.clock {
@@ -876,7 +891,7 @@ impl GlobalDispatch<WpFractionalScaleManagerV1, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        bind(state, client, resource, data_init);
+        admit(state, client, resource, (), data_init);
     }
 }
 
@@ -957,7 +972,7 @@ impl GlobalDispatch<WpFifoManagerV1, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        bind(state, client, resource, data_init);
+        admit(state, client, resource, (), data_init);
     }
 }
 
@@ -1042,7 +1057,7 @@ impl GlobalDispatch<WpContentTypeManagerV1, ()> for State {
         _: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        bind(state, client, resource, data_init);
+        admit(state, client, resource, (), data_init);
     }
 }
 
