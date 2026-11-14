@@ -119,7 +119,7 @@ fn fields(sample: &Sample) -> String {
     let _ = write!(
         text,
         "\"since_open\":{:.3},\"presentation\":{{\"committed\":{},\"presented\":{},\
-         \"discarded\":{},\"zero_copy\":{},\"gaps\":[{}],\"longer_gaps\":{},\"probes\":{},\
+         \"discarded\":{},\"zero_copy\":{},\"gaps\":[{}],\"longer_gaps\":{},\"probes_ended\":{},\
          \"display_rate\":{},\"last_probe_ms\":{}}},\
          \"main_thread\":{},\"relay_thread\":{},\"clock\":{},\"ui_frames\":{},\
          \"ui_frames_late\":{}",
@@ -130,7 +130,7 @@ fn fields(sample: &Sample) -> String {
         presentation.zero_copy,
         gaps.join(","),
         presentation.longer_gaps,
-        presentation.probes,
+        presentation.probes_ended,
         display_rate,
         last_probe,
         switches(sample.main_thread),
@@ -159,7 +159,7 @@ mod tests {
                 zero_copy: 5,
                 gaps,
                 longer_gaps: 1,
-                probes: 1,
+                probes_ended: 1,
                 display_rate: Some(DisplayRate::Fixed),
                 last_probe: Some(Duration::from_micros(1_402_340)),
             },
@@ -181,7 +181,7 @@ mod tests {
     const FIELDS: &str = "\"since_open\":3.000,\"presentation\":{\"committed\":72,\
         \"presented\":70,\"discarded\":2,\"zero_copy\":5,\
         \"gaps\":[0,0,0,0,0,0,0,0,0,0,12,11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\
-        \"longer_gaps\":1,\"probes\":1,\"display_rate\":\"fixed\",\"last_probe_ms\":1402.3},\
+        \"longer_gaps\":1,\"probes_ended\":1,\"display_rate\":\"fixed\",\"last_probe_ms\":1402.3},\
         \"main_thread\":{\"voluntary\":310,\"involuntary\":4},\
         \"relay_thread\":null,\"clock\":{\"position\":2.500,\"running\":true,\
         \"rate\":0.993170},\"ui_frames\":3,\"ui_frames_late\":0";

@@ -128,7 +128,8 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   shares the window's connection; M1.4b measures it while a film plays.
 - The relay tells the display's rate (`src/relay/rate.rs`,
   [ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md)). When the
-  engine thread asks, mpv under audio sync, the relay's probe lets 8 frames go by, then reads 24
+  engine thread asks, mpv under audio sync, the relay's probe lets 8 frames and 100 ms go by (the
+  presents mpv timed under display sync before the request), then reads 24
   intervals between frames presented one after the other, from the compositor's presentation
   feedback: at least half within 50 µs of a whole number of refreshes is a fixed rate, fewer is
   VRR. It tells the verdict once. A new size of the plane, an output entered or left, or a new

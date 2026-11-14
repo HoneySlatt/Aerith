@@ -87,7 +87,8 @@ pub const REFRESH_NS: u64 = 16_666_666;
 pub const OUTPUT_SIZE: (i32, i32) = (1920, 1080);
 
 /// Under VRR, the time from one frame presented to the next: a 24 fps film's period, 2.5 refreshes,
-/// so that no frame shows at a refresh of the fixed rate.
+/// so that no interval between two frames presented one after the other is a whole number of the
+/// fixed rate's refreshes. Each commit the compositor presents, of any surface, is such a frame.
 pub const VRR_FRAME_NS: u64 = 41_666_667;
 
 /// What the fake compositor saw, and how it answers.
@@ -115,6 +116,9 @@ pub struct Recorded {
     /// Whether the display runs under VRR: each frame [`VRR_FRAME_NS`] after the last, between
     /// the fixed rate's refreshes.
     pub vrr: bool,
+    /// Whether presentations carry no `vsync` or `hw_clock` flag and a refresh period of 0, as
+    /// wlroots' headless backend's do: their time is not the display's own.
+    pub untimed: bool,
     /// Whether VRR turns on while a surface with a viewport fills the output, and off when its
     /// viewport makes it smaller, at its commit, as KWin's automatic VRR does for fullscreen
     /// windows.
@@ -243,7 +247,14 @@ impl Recorded {
             last + refreshes * REFRESH_NS
         };
         self.presented_at = at;
-        let mut flags = Kind::Vsync | Kind::HwClock | Kind::HwCompletion;
+        let (mut flags, refresh) = if self.untimed {
+            (Kind::empty(), 0)
+        } else {
+            (
+                Kind::Vsync | Kind::HwClock | Kind::HwCompletion,
+                REFRESH_NS as u32,
+            )
+        };
         if self.zero_copy {
             flags |= Kind::ZeroCopy;
         }
@@ -257,7 +268,7 @@ impl Recorded {
                         0,
                         seconds,
                         nanoseconds,
-                        REFRESH_NS as u32,
+                        refresh,
                         (counter >> 32) as u32,
                         counter as u32,
                         flags,

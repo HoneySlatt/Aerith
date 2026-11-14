@@ -184,7 +184,7 @@ enum Message {
     Disconnected(String),
     /// How to ask the relay for a probe of the display's rate, sent once, with a plane, before
     /// any command.
-    Probes(Box<dyn Fn(u64) + Send>),
+    ProbeAsker(Box<dyn Fn(u64) + Send>),
     /// What the relay tells of the display.
     Display(DisplayNews),
     /// The player is dropped: mpv is to quit.
@@ -240,7 +240,7 @@ impl Engine {
             // A relay that cannot start ends the engine with it: dropping it ends mpv.
             let relay = Relay::start(window, relay_end, failed, display_news)?;
             // Before any command: the player's caller has not had the engine yet.
-            let _ = engine.inbox.send(Message::Probes(relay.probes()));
+            let _ = engine.inbox.send(Message::ProbeAsker(relay.probe_asker()));
             engine.plane = Some(Plane::new(relay));
         }
         Ok((engine, events))
@@ -525,9 +525,9 @@ struct Session {
     picture_failed: bool,
     /// How to ask the relay for a probe of the display's rate; `None` without a plane, where mpv
     /// stays under audio sync.
-    probes: Option<Box<dyn Fn(u64) + Send>>,
+    ask_relay_probe: Option<Box<dyn Fn(u64) + Send>>,
     /// The number of the last probe asked for: the relay's verdict on any other is stale.
-    probe: u64,
+    last_probe: u64,
     /// Whether mpv was set to display sync for the current source. Each source starts under
     /// audio sync, an option of its own load.
     display_sync: bool,
@@ -554,8 +554,8 @@ impl Session {
             properties: HashMap::new(),
             report: None,
             picture_failed: false,
-            probes: None,
-            probe: 0,
+            ask_relay_probe: None,
+            last_probe: 0,
             display_sync: false,
         }
     }
@@ -578,7 +578,7 @@ impl Session {
             match message {
                 Message::Command(command) => self.command(command),
                 Message::Received(value) => self.received(&value),
-                Message::Probes(probes) => self.probes = Some(probes),
+                Message::ProbeAsker(ask) => self.ask_relay_probe = Some(ask),
                 Message::Display(news) => self.display_news(news),
                 Message::Disconnected(reason) => {
                     // mpv quits at the end of its connection: close it before waiting, so that an
@@ -796,7 +796,8 @@ impl Session {
             }
             Some(Pending::Sync { open, display }) if self.current == Some(open) => {
                 if !success {
-                    self.display_sync = false;
+                    // mpv kept the sync it had.
+                    self.display_sync = !display;
                     self.emit(Event::Refused {
                         command: "video-sync",
                         reason: error(),
@@ -882,6 +883,18 @@ impl Session {
                 self.picture_failed = false;
                 self.properties.clear();
                 self.display_sync = false;
+                // A switch to display sync sent for the last source and not answered yet reaches
+                // this one after its own audio sync, as mpv reads commands while it opens a
+                // source: it is undone. mpv answers in order, so it is still waiting exactly then.
+                let switched_late = self.pending.values().any(|pending| {
+                    matches!(pending, Pending::Sync { open, display: true } if Some(*open) != self.current)
+                });
+                if switched_late {
+                    self.request(
+                        Pending::Ignored,
+                        json!(["set_property", "video-sync", "audio"]),
+                    );
+                }
             }
             "playback-restart" => {
                 if let Some(open) = self.current.filter(|_| !self.started) {
@@ -936,9 +949,9 @@ impl Session {
     /// Asks the relay for a probe of the display's rate, mpv under audio sync, if there is a
     /// plane.
     fn ask_probe(&mut self) {
-        if let Some(probes) = &self.probes {
-            self.probe += 1;
-            probes(self.probe);
+        if let Some(ask) = &self.ask_relay_probe {
+            self.last_probe += 1;
+            ask(self.last_probe);
         }
     }
 
@@ -952,7 +965,7 @@ impl Session {
             DisplayNews::Rate {
                 probe,
                 rate: DisplayRate::Fixed,
-            } if probe == self.probe && !self.display_sync => {
+            } if probe == self.last_probe && !self.display_sync => {
                 self.set_sync(open, true);
             }
             // Under VRR mpv stays under audio sync; a verdict on an older probe is stale.
@@ -2151,7 +2164,7 @@ mod tests {
         let asked = Arc::clone(&probes);
         engine
             .inbox
-            .send(Message::Probes(Box::new(move |number| {
+            .send(Message::ProbeAsker(Box::new(move |number| {
                 asked.lock().unwrap().push(number);
             })))
             .unwrap();
@@ -2346,9 +2359,56 @@ mod tests {
     }
 
     #[test]
-    fn without_a_plane_no_probe_is_asked() {
+    fn without_a_plane_mpv_is_never_switched() {
         let (engine, events, mut mpv) = driven(exited());
         start(&engine, &mut mpv, &events, 1, &json!({}));
         mpv.silent(Duration::from_millis(300));
+    }
+
+    #[test]
+    fn a_refused_switch_back_to_audio_sync_leaves_mpv_counted_under_display_sync() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        tell(&engine, fixed(1));
+        sync_set(&mut mpv, "display-resample", "success");
+        mpv.position(1.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        tell(&engine, DisplayNews::Changed);
+        sync_set(&mut mpv, "audio", "property unavailable");
+        assert!(matches!(next(&events), Event::Refused { .. }));
+        // mpv is under display sync still: a change asks for audio sync again, not a probe.
+        tell(&engine, DisplayNews::Changed);
+        sync_set(&mut mpv, "audio", "success");
+        mpv.position(2.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        assert_eq!(probes_asked(&probes, 2), [1, 2]);
+    }
+
+    #[test]
+    fn a_switch_to_display_sync_that_reaches_the_next_source_is_undone() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        let first = start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        let second = engine.open(file("/corpus/next.mkv")).unwrap();
+        mpv.load(2);
+        // The first source's verdict comes as mpv opens the second: its switch reaches the
+        // second, after the second's own audio sync.
+        tell(&engine, fixed(1));
+        let switch = mpv.command();
+        assert_eq!(
+            switch["command"],
+            json!(["set_property", "video-sync", "display-resample"])
+        );
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        assert_eq!(next(&events), Event::Ended(first, Ending::Stopped));
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        mpv.answer(&switch, "success", Value::Null);
+        sync_set(&mut mpv, "audio", "success");
+        mpv.send(json!({"event": "playback-restart"}));
+        assert_eq!(next(&events), Event::Started(second));
+        assert_eq!(probes_asked(&probes, 2), [1, 2]);
     }
 }

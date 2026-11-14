@@ -2310,7 +2310,7 @@ fn frames_at_whole_refreshes_tell_a_fixed_rate() {
     let (host, _interface, plane, mut mpv, news, surface) = shown_telling();
     host.with(|recorded| recorded.refreshes_a_frame = 3);
     play(&mut mpv, &surface, 5);
-    plane.relay().probes()(1);
+    plane.relay().probe_asker()(1);
     play(&mut mpv, &surface, PROBED - 1);
     assert!(news.lock().unwrap().is_empty(), "one frame short");
     play(&mut mpv, &surface, 1);
@@ -2320,7 +2320,7 @@ fn frames_at_whole_refreshes_tell_a_fixed_rate() {
         [DisplayNews::Rate { probe: 1, rate }]
     );
     let counts = plane.presentation();
-    assert_eq!((counts.probes, counts.display_rate), (1, Some(rate)));
+    assert_eq!((counts.probes_ended, counts.display_rate), (1, Some(rate)));
     assert!(counts.last_probe.is_some());
     // A probe tells once.
     play(&mut mpv, &surface, PROBED);
@@ -2331,7 +2331,7 @@ fn frames_at_whole_refreshes_tell_a_fixed_rate() {
 fn frames_between_refreshes_tell_vrr() {
     let (host, _interface, plane, mut mpv, news, surface) = shown_telling();
     host.with(|recorded| recorded.vrr = true);
-    plane.relay().probes()(4);
+    plane.relay().probe_asker()(4);
     play(&mut mpv, &surface, PROBED);
     let rate = DisplayRate::Variable;
     assert_eq!(
@@ -2348,14 +2348,14 @@ fn nothing_is_told_without_a_probe_asked() {
     plane.place(0, 0, 640, 360).unwrap();
     play(&mut mpv, &surface, 2);
     assert!(news.lock().unwrap().is_empty());
-    assert_eq!(plane.presentation().probes, 0);
+    assert_eq!(plane.presentation().probes_ended, 0);
 }
 
 #[test]
 fn vrr_that_turns_on_with_fullscreen_is_told_after_the_change() {
     let (host, interface, plane, mut mpv, news, surface) = shown_telling();
     host.with(|recorded| recorded.vrr_while_fullscreen = true);
-    plane.relay().probes()(1);
+    plane.relay().probe_asker()(1);
     play(&mut mpv, &surface, PROBED);
     let fixed = DisplayNews::Rate {
         probe: 1,
@@ -2376,7 +2376,7 @@ fn vrr_that_turns_on_with_fullscreen_is_told_after_the_change() {
     interface.commit();
     assert_eq!(news.lock().unwrap().len(), 2);
     // The player switched mpv to audio sync, and asks again.
-    plane.relay().probes()(2);
+    plane.relay().probe_asker()(2);
     play(&mut mpv, &surface, PROBED);
     host.with(|recorded| assert!(recorded.vrr, "the fake compositor's VRR is on"));
     let variable = DisplayNews::Rate {
@@ -2387,13 +2387,13 @@ fn vrr_that_turns_on_with_fullscreen_is_told_after_the_change() {
         *news.lock().unwrap(),
         [fixed, DisplayNews::Changed, variable]
     );
-    assert_eq!(plane.presentation().probes, 2);
+    assert_eq!(plane.presentation().probes_ended, 2);
 }
 
 #[test]
 fn a_change_during_a_probe_starts_it_again_untold() {
     let (host, interface, plane, mut mpv, news, surface) = shown_telling();
-    plane.relay().probes()(1);
+    plane.relay().probe_asker()(1);
     play(&mut mpv, &surface, PROBED - 1);
     // A new size, and VRR on: the frames before say nothing of the display after.
     host.with(|recorded| recorded.vrr = true);
@@ -2416,7 +2416,7 @@ fn a_change_during_a_probe_starts_it_again_untold() {
 #[test]
 fn leaving_an_output_after_a_probe_is_a_change() {
     let (host, _interface, plane, mut mpv, news, surface) = shown_telling();
-    plane.relay().probes()(1);
+    plane.relay().probe_asker()(1);
     play(&mut mpv, &surface, PROBED);
     host.leave_outputs();
     let deadline = Instant::now() + WAIT;
@@ -2429,11 +2429,26 @@ fn leaving_an_output_after_a_probe_is_a_change() {
 }
 
 #[test]
+fn presentations_without_the_displays_own_time_tell_nothing() {
+    let (host, _interface, plane, mut mpv, news, surface) = shown_telling();
+    host.with(|recorded| recorded.untimed = true);
+    plane.relay().probe_asker()(1);
+    play(&mut mpv, &surface, 2 * PROBED);
+    assert!(
+        news.lock().unwrap().is_empty(),
+        "{:?}",
+        news.lock().unwrap()
+    );
+    assert_eq!(plane.presentation().probes_ended, 0);
+    assert!(plane.presentation().presented >= u64::from(2 * PROBED));
+}
+
+#[test]
 fn a_probe_asked_after_the_plane_closed_does_nothing() {
     let (_host, _interface, plane, _mpv, news, _surface) = shown_telling();
-    let probes = plane.relay().probes();
+    let probes = plane.relay().probe_asker();
     plane.close();
     probes(1);
     assert!(news.lock().unwrap().is_empty());
-    assert_eq!(plane.presentation().probes, 0);
+    assert_eq!(plane.presentation().probes_ended, 0);
 }

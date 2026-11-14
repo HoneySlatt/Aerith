@@ -394,7 +394,7 @@ impl Relay {
     /// How the player asks for a probe of the display's rate, from its own thread: the number it
     /// gives comes back with the verdict, in [`DisplayNews::Rate`]. mpv must be under audio sync
     /// from then on ([`rate`]). Nothing happens once the plane is closed.
-    pub(crate) fn probes(&self) -> Box<dyn Fn(u64) + Send> {
+    pub(crate) fn probe_asker(&self) -> Box<dyn Fn(u64) + Send> {
         let shared = Arc::clone(&self.shared);
         Box::new(move |number| {
             let mut state = lock(&shared);
@@ -737,7 +737,7 @@ impl State {
     pub(super) fn tell(&mut self, news: Option<DisplayNews>) {
         let Some(news) = news else { return };
         if let DisplayNews::Rate { rate, .. } = news {
-            self.presentation.probes += 1;
+            self.presentation.probes_ended += 1;
             self.presentation.display_rate = Some(rate);
             self.presentation.last_probe = self.probe_asked.take().map(|asked| asked.elapsed());
         }

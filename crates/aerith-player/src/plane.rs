@@ -185,7 +185,7 @@ pub struct Presentation {
     pub longer_gaps: u64,
     /// The probes of the display's rate that ended: the player asks for one at each source's
     /// first frame, and again when the window or its display changes ([`DisplayRate`]).
-    pub probes: u64,
+    pub probes_ended: u64,
     /// The display's rate, as the last probe that ended told it.
     pub display_rate: Option<DisplayRate>,
     /// How long the last probe that ended took, from the player's request to its verdict.

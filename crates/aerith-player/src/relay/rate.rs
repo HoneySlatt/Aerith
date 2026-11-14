@@ -11,8 +11,8 @@
 //! Under display sync, mpv presents at every refresh and holds a VRR display at its top rate, so
 //! that it looks fixed: the player probes only under audio sync, and asks for each probe.
 //!
-//! A **probe** lets [`SETTLE`] frames go by, then reads [`INTERVALS`] intervals between frames
-//! presented one after the other. An interval is whole when it lies within [`TOLERANCE_NS`] of a
+//! A **probe** lets [`SETTLE`] frames and [`SETTLE_NS`] go by, then reads [`INTERVALS`] intervals
+//! between frames presented one after the other. An interval is whole when it lies within [`TOLERANCE_NS`] of a
 //! whole number of the refresh period the compositor gives. The display runs at a fixed rate when
 //! at least half the intervals are whole.
 //!
@@ -29,8 +29,17 @@
 use crate::plane::DisplayRate;
 
 /// The frames a probe lets go by before it reads intervals: those mpv timed before it was asked
-/// for audio sync, still in its swapchain (three by default) or on their way, with a margin.
+/// for audio sync, in its swapchain (two by default) or on their way, with a margin.
 pub(super) const SETTLE: u32 = 8;
+
+/// How long a probe lets frames go by, from the first frame presented after it was asked, on the
+/// compositor's clock. Under display sync, mpv presents a frame again at each refresh until its
+/// share of refreshes runs out, and a change of `video-sync` leaves the frame on screen to its end
+/// (mpv 0.42, `video/out/vo.c`): up to one film frame (41.7 ms at 23.976 fps) of presents one
+/// refresh apart, then the swapchain's two, 33 ms at 60 Hz. Those would read as whole intervals,
+/// as a VRR display fed at every refresh runs at its top rate. Counted in frames, they grow with
+/// the refresh rate (22 at 480 Hz); in time, they stay within 100 ms.
+pub(super) const SETTLE_NS: u128 = 100_000_000;
 
 /// The intervals a probe reads: one second of a 24 fps film.
 pub(super) const INTERVALS: u32 = 24;
@@ -61,7 +70,8 @@ pub(super) struct Timed {
 #[derive(Debug, Default)]
 pub(super) struct Probe {
     phase: Phase,
-    /// The last frame presented with a time the display's hardware gave, and a refresh period.
+    /// The last frame presented with a time the display's hardware gave, and a refresh period:
+    /// a frame without one leaves it.
     last: Option<Timed>,
 }
 
@@ -75,6 +85,8 @@ enum Phase {
         number: u64,
         /// Frames still to let go by.
         settle: u32,
+        /// Until when frames are let go by, once a frame with a time came: [`SETTLE_NS`] after it.
+        settle_until: Option<u128>,
         /// The frame read last since the settle, which the next makes an interval with.
         previous: Option<Timed>,
         intervals: u32,
@@ -93,6 +105,7 @@ impl Probe {
         self.phase = Phase::Watching {
             number,
             settle: SETTLE,
+            settle_until: None,
             previous: None,
             intervals: 0,
             whole: 0,
@@ -106,12 +119,14 @@ impl Probe {
         match &mut self.phase {
             Phase::Watching {
                 settle,
+                settle_until,
                 previous,
                 intervals,
                 whole,
                 ..
             } => {
-                (*settle, *previous, *intervals, *whole) = (SETTLE, None, 0, 0);
+                (*settle, *settle_until, *previous) = (SETTLE, None, None);
+                (*intervals, *whole) = (0, 0);
                 None
             }
             Phase::Ended => {
@@ -126,15 +141,18 @@ impl Probe {
     /// display's hardware gave (no `vsync` or `hw_clock` flag) or the compositor gave no refresh
     /// period, and then breaks the chain of intervals. Returns the news it makes, if any.
     pub(super) fn presented(&mut self, frame: Option<Timed>) -> Option<DisplayNews> {
-        let last = std::mem::replace(&mut self.last, frame);
-        if let (Some(last), Some(frame)) = (last, frame)
-            && last.refresh_ns != frame.refresh_ns
+        if let Some(frame) = frame
+            && self
+                .last
+                .replace(frame)
+                .is_some_and(|last| last.refresh_ns != frame.refresh_ns)
         {
             return self.changed();
         }
         let Phase::Watching {
             number,
             settle,
+            settle_until,
             previous,
             intervals,
             whole,
@@ -142,8 +160,19 @@ impl Probe {
         else {
             return None;
         };
+        if let Some(frame) = frame {
+            settle_until.get_or_insert(frame.at_ns + SETTLE_NS);
+        }
         if *settle > 0 {
             *settle -= 1;
+            return None;
+        }
+        let settled = frame
+            .zip(*settle_until)
+            .is_some_and(|(frame, until)| frame.at_ns >= until);
+        // A frame without a time breaks the chain, as does each frame still settling.
+        if !settled {
+            *previous = None;
             return None;
         }
         let (Some(previous), Some(frame)) = (std::mem::replace(previous, frame), frame) else {
@@ -173,8 +202,11 @@ impl Probe {
 }
 
 /// Whether `interval` lies within [`TOLERANCE_NS`] of a whole number, one or more, of
-/// `refresh`, both in nanoseconds.
+/// `refresh`, both in nanoseconds. A refresh of 0, which the protocol allows, is never whole.
 fn is_whole(interval: u128, refresh: u128) -> bool {
+    if refresh == 0 {
+        return false;
+    }
     let refreshes = (interval + refresh / 2) / refresh;
     refreshes >= 1 && interval.abs_diff(refreshes * refresh) <= TOLERANCE_NS
 }
@@ -441,5 +473,55 @@ mod tests {
                 rate: DisplayRate::Fixed
             }]
         );
+    }
+
+    #[test]
+    fn display_sync_repeats_after_a_switch_are_not_read_as_a_fixed_rate() {
+        // At 480 Hz, a 24 fps frame mpv timed under display sync shows 20 refreshes, each a
+        // present, and mpv's swapchain holds 2 more: all left over when the probe is asked.
+        const REFRESH_480: u32 = 2_083_333;
+        let mut probe = Probe::default();
+        probe.watch(2);
+        let mut at = 1_000_000_000_u128;
+        let mut news = Vec::new();
+        for _ in 0..22 {
+            at += u128::from(REFRESH_480);
+            news.extend(probe.presented(Some(Timed {
+                at_ns: at,
+                refresh_ns: REFRESH_480,
+            })));
+        }
+        for gap in variable_gaps(40) {
+            at += gap;
+            news.extend(probe.presented(Some(Timed {
+                at_ns: at,
+                refresh_ns: REFRESH_480,
+            })));
+        }
+        assert_eq!(
+            news,
+            [DisplayNews::Rate {
+                probe: 2,
+                rate: DisplayRate::Variable
+            }]
+        );
+    }
+
+    #[test]
+    fn a_new_refresh_period_behind_an_untimed_frame_is_still_a_change() {
+        let mut probe = Probe::default();
+        probe.watch(1);
+        let (_, at) = feed(&mut probe, 0, &fixed_gaps((SETTLE + INTERVALS) as usize));
+        assert_eq!(probe.presented(None), None);
+        let sixty = Some(Timed {
+            at_ns: at + 16_666_667,
+            refresh_ns: 16_666_667,
+        });
+        assert_eq!(probe.presented(sixty), Some(DisplayNews::Changed));
+    }
+
+    #[test]
+    fn a_refresh_period_of_zero_is_never_whole() {
+        assert!(!is_whole(41_666_667, 0));
     }
 }

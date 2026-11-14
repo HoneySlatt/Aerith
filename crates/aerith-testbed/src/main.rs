@@ -59,7 +59,7 @@
 //! - `since_open`: seconds since the source was opened;
 //! - `presentation`: the plane's `Presentation`, as `aerith-player` counts it:
 //!   `committed`, `presented`, `discarded`, `zero_copy`, `gaps` (32 counts), `longer_gaps`,
-//!   `probes` (the probes of the display's rate that ended), `display_rate` (`"fixed"`,
+//!   `probes_ended` (the probes of the display's rate that ended), `display_rate` (`"fixed"`,
 //!   `"variable"`, or `null` before the first verdict) and `last_probe_ms` (how long the last
 //!   probe took, from the player's request to its verdict, or `null`);
 //! - `main_thread` and `relay_thread`: the context switches of the testbed's main thread, which
@@ -73,7 +73,7 @@
 //! - in the summary only: `first_frame_ms`, from the open to the player's `Started`, or `null`.
 //!
 //! ```text
-//! {"since_open":1.000,"presentation":{"committed":24,"presented":24,"discarded":0,"zero_copy":0,"gaps":[0,0,...],"longer_gaps":0,"probes":0,"display_rate":null,"last_probe_ms":null},"main_thread":{"voluntary":310,"involuntary":4},"relay_thread":{"voluntary":95,"involuntary":0},"clock":{"position":0.412,"running":true,"rate":1.000000},"ui_frames":1,"ui_frames_late":0}
+//! {"since_open":1.000,"presentation":{"committed":24,"presented":24,"discarded":0,"zero_copy":0,"gaps":[0,0,...],"longer_gaps":0,"probes_ended":0,"display_rate":null,"last_probe_ms":null},"main_thread":{"voluntary":310,"involuntary":4},"relay_thread":{"voluntary":95,"involuntary":0},"clock":{"position":0.412,"running":true,"rate":1.000000},"ui_frames":1,"ui_frames_late":0}
 //! ```
 //!
 //! [ADR-0015]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0015-a-relay-for-mpvs-wayland-surface.md
