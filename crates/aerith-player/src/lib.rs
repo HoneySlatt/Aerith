@@ -60,7 +60,8 @@ mod relay;
 mod source;
 
 pub use event::{
-    AudioFormat, AudioReport, Clock, Colour, Ending, Event, OpenId, Report, VideoReport,
+    AudioFormat, AudioReport, Clock, Colour, DeclaredDolbyVision, Ending, Event, OpenId, Report,
+    VideoReport,
 };
 #[cfg(target_os = "linux")]
 pub use plane::{COUNTED_GAPS, DisplayRate, InvalidPlace, Plane, Presentation, Window};

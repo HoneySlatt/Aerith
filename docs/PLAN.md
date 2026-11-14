@@ -328,8 +328,10 @@ on both tiers on Linux.
 - A source that is a playlist is stopped, but mpv may start fetching its first entry, without the
   source's headers, before the stop arrives
   ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-- The player's report uses mpv's names for codecs, formats and colours, and says nothing of Dolby
-  Vision yet (M1.5).
+- The player's report uses mpv's names for codecs, formats and colours. It tells Dolby Vision
+  only for the selected video track, and only when mpv reshapes the picture or the container
+  declares it: a file whose Dolby Vision metadata mpv cannot read (the corpus's
+  `dv7-1080p.ts`) shows as HDR10.
 - The relay's automated tests cover a fake compositor and lavapipe's shared memory only. Real
   dma-bufs and a real compositor were exercised by hand, a few minutes, on Umbriel only. Its
   checks follow wlroots 0.20: other compositors may refuse what wlroots accepts.

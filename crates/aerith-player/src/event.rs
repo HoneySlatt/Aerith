@@ -120,6 +120,22 @@ pub struct VideoReport {
     pub output: String,
     /// The colour the output draws in; `None` when nothing is drawn.
     pub drawn: Option<Colour>,
+    /// Whether the engine reshapes the picture with its Dolby Vision metadata: the only sign
+    /// that Dolby Vision is shown. mpv says so by the decoded picture's colour matrix,
+    /// `dolbyvision`.
+    pub dolby_vision: bool,
+    /// The Dolby Vision profile and level the container declares for the track: a claim the
+    /// engine may not act on (mpv does not reshape every file that declares one).
+    pub declared_dolby_vision: Option<DeclaredDolbyVision>,
+}
+
+/// The Dolby Vision configuration a container declares for a track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeclaredDolbyVision {
+    /// The profile, such as 5, 7 or 8.
+    pub profile: u32,
+    /// The level, which bounds the picture's size and rate.
+    pub level: u32,
 }
 
 /// How a picture's colours are to be read.

@@ -54,7 +54,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::event::{
-    AudioFormat, AudioReport, Clock, Colour, Ending, Event, OpenId, Report, VideoReport,
+    AudioFormat, AudioReport, Clock, Colour, DeclaredDolbyVision, Ending, Event, OpenId, Report,
+    VideoReport,
 };
 use crate::plane::{DisplayRate, Plane};
 use crate::player::{Audio, Command, EngineGone, Settings, Video};
@@ -1031,6 +1032,8 @@ impl Session {
             "track-list" => {
                 self.properties.insert("track-list", data);
                 self.check_picture();
+                // The report reads the Dolby Vision the container declares from it.
+                self.send_report();
             }
             _ => {
                 // Only the names asked for are kept: the map stays bounded.
@@ -1120,6 +1123,8 @@ fn report(properties: &HashMap<&'static str, Value>) -> Report {
             decoded: colour(params)?,
             output: text("current-vo").unwrap_or("none").to_owned(),
             drawn: properties.get("video-target-params").and_then(colour),
+            dolby_vision: params["colormatrix"] == "dolbyvision",
+            declared_dolby_vision: properties.get("track-list").and_then(declared_dolby_vision),
         })
     })();
     let audio = (|| {
@@ -1131,6 +1136,20 @@ fn report(properties: &HashMap<&'static str, Value>) -> Report {
         })
     })();
     Report { video, audio }
+}
+
+/// The Dolby Vision configuration the container declares for the selected video track, from
+/// mpv's track list; `None` when it declares none, or mpv's values are not numbers.
+fn declared_dolby_vision(tracks: &Value) -> Option<DeclaredDolbyVision> {
+    let track = tracks
+        .as_array()?
+        .iter()
+        .find(|track| track["type"] == "video" && track["selected"] == true)?;
+    let number = |name: &str| u32::try_from(track[name].as_u64()?).ok();
+    Some(DeclaredDolbyVision {
+        profile: number("dolby-vision-profile")?,
+        level: number("dolby-vision-level")?,
+    })
 }
 
 /// Waits for mpv to exit, up to [`GRACE`], kills it if it has not, and says how it ended.
@@ -1961,6 +1980,52 @@ mod tests {
         };
         assert!(report.video.is_none() && report.audio.is_some());
         quiet(&events);
+    }
+
+    #[test]
+    fn dolby_vision_is_reported_as_mpv_applies_it_and_apart_as_the_container_declares_it() {
+        let (engine, events, mut mpv) = driven(exited());
+        let open = start(&engine, &mut mpv, &events, 1, &hdr_report());
+        // An HDR10 picture: no Dolby Vision, applied or declared.
+        mpv.send(json!({"event": "video-reconfig"}));
+        mpv.report_read(&hdr_report());
+        quiet(&events);
+        let declared = json!([
+            {"type": "video", "selected": true, "dolby-vision-profile": 8, "dolby-vision-level": 6},
+            {"type": "audio", "selected": true},
+        ]);
+        // The container declares profile 8, but mpv has not reshaped the picture: a claim only.
+        mpv.property("track-list", declared);
+        let Event::Report(o, report) = next(&events) else {
+            panic!("a report")
+        };
+        assert_eq!(o, open);
+        let video = report.video.unwrap();
+        assert!(!video.dolby_vision);
+        assert_eq!(
+            video.declared_dolby_vision,
+            Some(DeclaredDolbyVision {
+                profile: 8,
+                level: 6
+            })
+        );
+        // mpv reshapes the picture with its metadata: Dolby Vision shows.
+        let mut params = hdr_report()["video-params"].clone();
+        params["colormatrix"] = json!("dolbyvision");
+        mpv.property("video-params", params);
+        let Event::Report(_, report) = next(&events) else {
+            panic!("a report")
+        };
+        assert!(report.video.unwrap().dolby_vision);
+        // A track list mpv sends malformed declares nothing, and breaks nothing.
+        mpv.property(
+            "track-list",
+            json!([{"type": "video", "selected": true, "dolby-vision-profile": "eight"}]),
+        );
+        let Event::Report(_, report) = next(&events) else {
+            panic!("a report")
+        };
+        assert_eq!(report.video.unwrap().declared_dolby_vision, None);
     }
 
     #[test]
