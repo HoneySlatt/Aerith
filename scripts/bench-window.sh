@@ -2,10 +2,10 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
 # the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-# Measures Aerith inside its window, through aerith-testbed, against mpv alone (milestones M1.4b
-# and M1.4c), at the refresh rate the screen has now. Run it inside the bench's shell, on the machine's own
-# desktop session, with nothing else on the screen: each run takes the screen, fullscreen. No sound
-# plays: the players play into the bench's own silent PipeWire (ADR-0013).
+# Measures Aerith inside its window, through aerith-testbed, against mpv alone (milestones
+# M1.4b and M1.4c), at the refresh rate the screen has now. Run it inside the bench's shell, on
+# the machine's own desktop session, with nothing else on the screen: each run takes the screen,
+# fullscreen. No sound plays: the players play into the bench's own silent PipeWire (ADR-0013).
 #
 #   nix develop .#bench --command scripts/bench-window.sh <corpus> <display> [part...]
 #
@@ -37,7 +37,7 @@ usage() { echo "usage: scripts/bench-window.sh <corpus> <display> [cadence|toggl
 corpus=$1 display=$2
 shift 2
 parts=("$@")
-[ ${#parts[@]} -gt 0 ] || parts=(cadence toggles sync frames)
+[ ${#parts[@]} -gt 0 ] || parts=(cadence toggles sync frames rule)
 for part in "${parts[@]}"; do
     case "$part" in cadence | toggles | sync | frames | rule) ;; *) usage ;; esac
 done
@@ -103,11 +103,13 @@ for part in "${parts[@]}"; do
             ;;
         sync)
             for rate in 23.976 25 59.94; do
-                measure mpv "cadence-$rate-1080p-h264-aac.mkv" "$seconds" --mpv-option video-sync=display-resample
+                measure mpv "cadence-$rate-1080p-h264-aac.mkv" "$seconds" \
+                    --mpv-option video-sync=display-resample
             done
             ;;
         rule)
-            for clip in cadence-{23.976,24,25,29.97,50,59.94,60}-1080p-h264-aac.mkv sdr-2160p-hevc10-eac3.mkv; do
+            for clip in cadence-{23.976,24,25,29.97,50,59.94,60}-1080p-h264-aac.mkv \
+                sdr-2160p-hevc10-eac3.mkv; do
                 length=$seconds
                 [ "$clip" != sdr-2160p-hevc10-eac3.mkv ] || length=$((seconds < 55 ? seconds : 55))
                 measure mpv "$clip" "$length"

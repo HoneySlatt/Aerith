@@ -312,8 +312,9 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   thread during a film.
 - mpv's window ready from the start costs 84 MiB while idle on the high tier; the lowest laptop is
   measured at M1.5.
-- The relay's thread wakes about 6 times for each frame of a 24 fps film (142 a second), with no
-  breakdown and no budget yet.
+- The relay's thread wakes about 6 times for each frame of a 24 fps film (142 a second) under audio
+  sync, and 926 to 1,422 times a second under display sync at 240 Hz, the rule at a fixed rate
+  since M1.4c; no breakdown and no budget yet.
 - ADR-0015's "mpv is told the new size once it settles" is built without a timer: one size in
   flight, the latest after it. An animated resize thus makes mpv draw at several sizes in turn;
   morphs at Stage 3 may want a settle delay.

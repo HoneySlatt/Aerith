@@ -333,13 +333,13 @@ scripts/bench-window.sh <corpus> "<display>" [cadence|toggles|sync|frames|rule].
 runs M1.4b's and M1.4c's measures at the screen's current rate: every SDR cadence clip in mpv
 alone and in Aerith in each order, 60 toggles of the controls, mpv alone under display sync, the
 frames compared with mpv alone's (PSNR, `inf` for the same picture), and `rule`, M1.4c's: each
-SDR cadence clip in mpv alone under audio sync and under display sync, then in Aerith in the order
-above. Aerith chooses its own sync by the display's rate
+SDR cadence clip and the SDR 4K clip in mpv alone under audio sync and under display sync, then in
+Aerith in the order above. Aerith chooses its own sync by the display's rate
 ([ADR-0021](docs/adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)): an
 `--mpv-option video-sync=…` does not hold for it, as each source loads under audio sync. The
 result's `display_sync` is the share of mpv's readings, one a second, where it timed its frames by
 the display; the testbed's last line gives the relay's probes (`testbed.last.presentation`).
-`BENCH_SECONDS` sets each run's length (120 by default; about 2 hours 15 minutes for every part);
+`BENCH_SECONDS` sets each run's length (120 by default; about 2 hours 5 minutes for every part);
 the script's header gives each part's time. It builds the testbed and puts it on `PATH` itself.
 
 ### On the lowest laptop

@@ -34,8 +34,9 @@ use crate::sampler::{self, Sampler};
 use crate::sandbox::Sandbox;
 use crate::serve::ClipServer;
 
-/// The version of `result.json`'s layout; a change to its fields raises it.
-pub const RESULT_FORMAT: u32 = 2;
+/// The version of `result.json`'s layout; a change to its fields raises it. 3 added
+/// `display_sync` and the `display-sync-active` readings (M1.4c).
+pub const RESULT_FORMAT: u32 = 3;
 /// When the engine is asked what it decodes and outputs, after the first frame: once it settled.
 const REPORT_AFTER: Duration = Duration::from_secs(2);
 /// The first seconds of frames presented that the figures leave out: the start settles.

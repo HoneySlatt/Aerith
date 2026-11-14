@@ -115,7 +115,9 @@ pub fn round(value: f64, places: i32) -> f64 {
 /// Under display sync, mpv presents at every refresh, the same picture several times: the
 /// refresh gaps and the spans say nothing of the picture's cadence, and show as a dash; mpv's
 /// delayed and mistimed frames tell it instead. "Spans off" is the presentation's `timing`, for
-/// VRR: spans more than half a refresh from their frame periods.
+/// VRR: spans more than half a refresh from their frame periods. At a fixed rate, where an even
+/// cadence still puts frames a refresh off their periods, it shows as a dash: a run counts as VRR
+/// when fewer than half its intervals are a whole number of refreshes (`whole_intervals`).
 pub const TABLE_HEADER: &str = "| Rival | Clip | First frame | Display sync | Dropped | Decoder dropped | Delayed | Mistimed | Off cadence / presented | Spans off / spans | Scanned out | Sync, max / p99 | Memory, peak PSS | CPU, one core | Other programs | GPU power over idle |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 /// One row of the table, from a run's result.
@@ -149,7 +151,10 @@ pub fn table_row(result: &Value) -> String {
         )
     };
     let timing = &presentation["timing"];
-    let spans = if timing.is_null() || under_display_sync {
+    let variable = presentation["whole_intervals"]
+        .as_f64()
+        .is_some_and(|whole| whole < 0.5);
+    let spans = if timing.is_null() || under_display_sync || !variable {
         "–".to_owned()
     } else {
         format!(
@@ -298,6 +303,7 @@ mod tests {
             "rival": "aerith", "order": "above", "clip": "cadence-23.976", "first_frame_ms": 70.0,
             "frames": {"dropped": 0, "decoder_dropped": 0, "delayed": 0, "mistimed": 1},
             "presentation": {"presented": 1440, "zero_copy": 1440, "refresh_gaps": {"off_cadence": 2},
+                             "whole_intervals": 0.08,
                              "timing": {"spans": 1439, "off_by_half_a_refresh": 3}},
             "display_sync": {"active_share": 0.0, "readings": 58},
             "sync": null, "memory_mib": {"peak_pss": null}, "cpu": {"percent_of_one_core": null},
@@ -306,6 +312,13 @@ mod tests {
         assert_eq!(
             table_row(&aerith),
             "| aerith, above | cadence-23.976 | 70.0 ms | 0 % | 0 | 0 | 0 | 1 | 2 / 1440 | 3 / 1439 | 1440 | – | – | – | – | – |"
+        );
+        // At a fixed rate, the spans say nothing of the cadence.
+        let mut fixed = aerith.clone();
+        fixed["presentation"]["whole_intervals"] = json!(1.0);
+        assert_eq!(
+            table_row(&fixed),
+            "| aerith, above | cadence-23.976 | 70.0 ms | 0 % | 0 | 0 | 0 | 1 | 2 / 1440 | – | 1440 | – | – | – | – | – |"
         );
         // Under display sync, the gaps and spans say nothing of the picture's cadence.
         let mut displayed = aerith.clone();

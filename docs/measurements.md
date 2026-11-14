@@ -729,7 +729,7 @@ received), outside the repository: Umbriel at 240 Hz (`window-20261112T014314Z`,
 `window-kwin-20261112T054906Z`), KWin under VRR (`window-20261112T062420Z`) and Umbriel under VRR
 (`window-20261112T074630Z`). An interval is the time between two frames presented one after the
 other; it is whole within a tolerance of a whole number of the refresh period the compositor gave.
-Runs under display sync are left out of the VRR figures, which they cannot show.
+Runs under display sync have a column of their own: they cannot show VRR.
 
 | | Fixed rate, audio sync | VRR, audio sync | VRR, display sync |
 |---|---|---|---|
