@@ -91,6 +91,19 @@ pub fn sync_figures(avsync_seconds: &[f64]) -> Value {
     })
 }
 
+/// How long mpv timed its frames by the display's refreshes, from its `display-sync-active`
+/// readings, 1 or 0, each second after the first two: the share of readings it was on.
+pub fn display_sync_figures(active: &[f64]) -> Value {
+    if active.is_empty() {
+        return Value::Null;
+    }
+    let on = active.iter().filter(|value| **value > 0.5).count();
+    json!({
+        "active_share": round(on as f64 / active.len() as f64, 2),
+        "readings": active.len(),
+    })
+}
+
 /// Rounds to `places` decimal places, for readable reports.
 pub fn round(value: f64, places: i32) -> f64 {
     let scale = 10_f64.powi(places);
@@ -98,7 +111,12 @@ pub fn round(value: f64, places: i32) -> f64 {
 }
 
 /// The header of the table that compares runs, in Markdown.
-pub const TABLE_HEADER: &str = "| Rival | Clip | First frame | Dropped | Decoder dropped | Delayed | Mistimed | Off cadence / presented | Scanned out | Sync, max / p99 | Memory, peak PSS | CPU, one core | Other programs | GPU power over idle |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+///
+/// Under display sync, mpv presents at every refresh, the same picture several times: the
+/// refresh gaps and the spans say nothing of the picture's cadence, and show as a dash; mpv's
+/// delayed and mistimed frames tell it instead. "Spans off" is the presentation's `timing`, for
+/// VRR: spans more than half a refresh from their frame periods.
+pub const TABLE_HEADER: &str = "| Rival | Clip | First frame | Display sync | Dropped | Decoder dropped | Delayed | Mistimed | Off cadence / presented | Spans off / spans | Scanned out | Sync, max / p99 | Memory, peak PSS | CPU, one core | Other programs | GPU power over idle |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 /// One row of the table, from a run's result.
 pub fn table_row(result: &Value) -> String {
@@ -119,7 +137,9 @@ pub fn table_row(result: &Value) -> String {
         )
     };
     let presentation = &result["presentation"];
-    let cadence = if presentation.is_null() {
+    let share = result["display_sync"]["active_share"].as_f64();
+    let under_display_sync = share.is_some_and(|share| share > 0.5);
+    let cadence = if presentation.is_null() || under_display_sync {
         "–".to_owned()
     } else {
         format!(
@@ -128,20 +148,33 @@ pub fn table_row(result: &Value) -> String {
             text(&presentation["presented"], "")
         )
     };
+    let timing = &presentation["timing"];
+    let spans = if timing.is_null() || under_display_sync {
+        "–".to_owned()
+    } else {
+        format!(
+            "{} / {}",
+            text(&timing["off_by_half_a_refresh"], ""),
+            text(&timing["spans"], "")
+        )
+    };
+    let display_sync = share.map_or("–".to_owned(), |share| format!("{:.0} %", share * 100.0));
     let rival = match (result["rival"].as_str(), result["order"].as_str()) {
         (Some(rival), Some(order)) => format!("{rival}, {order}"),
         (rival, _) => rival.unwrap_or("?").to_owned(),
     };
     format!(
-        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
         rival,
         result["clip"].as_str().unwrap_or("?"),
         text(&result["first_frame_ms"], " ms"),
+        display_sync,
         text(&frames["dropped"], ""),
         text(&frames["decoder_dropped"], ""),
         text(&frames["delayed"], ""),
         text(&frames["mistimed"], ""),
         cadence,
+        spans,
         text(&presentation["zero_copy"], ""),
         sync,
         text(&result["memory_mib"]["peak_pss"], " MiB"),
@@ -242,6 +275,14 @@ mod tests {
     }
 
     #[test]
+    fn display_sync_is_the_share_of_readings_it_was_on() {
+        let figures = display_sync_figures(&[0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(figures["active_share"], json!(0.75));
+        assert_eq!(figures["readings"], json!(4));
+        assert!(display_sync_figures(&[]).is_null());
+    }
+
+    #[test]
     fn a_row_shows_missing_figures_as_a_dash() {
         let result = json!({
             "rival": "kodi", "clip": "hdr10", "first_frame_ms": 412.0,
@@ -251,18 +292,27 @@ mod tests {
         });
         assert_eq!(
             table_row(&result),
-            "| kodi | hdr10 | 412.0 ms | 3 | – | – | – | – | – | – | 300.5 MiB | 12.5 % | – | – |"
+            "| kodi | hdr10 | 412.0 ms | – | 3 | – | – | – | – | – | – | – | 300.5 MiB | 12.5 % | – | – |"
         );
         let aerith = json!({
             "rival": "aerith", "order": "above", "clip": "cadence-23.976", "first_frame_ms": 70.0,
             "frames": {"dropped": 0, "decoder_dropped": 0, "delayed": 0, "mistimed": 1},
-            "presentation": {"presented": 1440, "zero_copy": 1440, "refresh_gaps": {"off_cadence": 2}},
+            "presentation": {"presented": 1440, "zero_copy": 1440, "refresh_gaps": {"off_cadence": 2},
+                             "timing": {"spans": 1439, "off_by_half_a_refresh": 3}},
+            "display_sync": {"active_share": 0.0, "readings": 58},
             "sync": null, "memory_mib": {"peak_pss": null}, "cpu": {"percent_of_one_core": null},
             "gpu_power_w": {"playing_minus_idle": null},
         });
         assert_eq!(
             table_row(&aerith),
-            "| aerith, above | cadence-23.976 | 70.0 ms | 0 | 0 | 0 | 1 | 2 / 1440 | 1440 | – | – | – | – | – |"
+            "| aerith, above | cadence-23.976 | 70.0 ms | 0 % | 0 | 0 | 0 | 1 | 2 / 1440 | 3 / 1439 | 1440 | – | – | – | – | – |"
+        );
+        // Under display sync, the gaps and spans say nothing of the picture's cadence.
+        let mut displayed = aerith.clone();
+        displayed["display_sync"]["active_share"] = json!(0.97);
+        assert_eq!(
+            table_row(&displayed),
+            "| aerith, above | cadence-23.976 | 70.0 ms | 97 % | 0 | 0 | 0 | 1 | – | – | 1440 | – | – | – | – | – |"
         );
         assert_eq!(
             TABLE_HEADER.lines().next().unwrap().matches('|').count(),

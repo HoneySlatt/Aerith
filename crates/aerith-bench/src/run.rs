@@ -148,6 +148,14 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
         .skip(2)
         .filter_map(|counters| value_of(counters, "avsync"))
         .collect();
+    let display_sync = figures::display_sync_figures(
+        &played
+            .readings
+            .iter()
+            .skip(2)
+            .filter_map(|counters| value_of(counters, "display-sync-active"))
+            .collect::<Vec<_>>(),
+    );
     let frames = if options.rival == Rival::Kodi {
         notes.push(
             "Kodi publishes no frame counter: `dropped` counts the frames its debug log says it \
@@ -216,6 +224,7 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
         "presentation_source": wayland_log.as_ref().map(|_| "the compositor's presentation feedback to mpv, from mpv's WAYLAND_DEBUG log, the first 2 s left out"),
         "testbed": testbed,
         "sync": figures::sync_figures(logged_sync.as_deref().unwrap_or(&avsync)),
+        "display_sync": display_sync,
         "memory_mib": machine["memory_mib"],
         "cpu": machine["cpu"],
         "gpu_power_w": machine["gpu_power_w"],

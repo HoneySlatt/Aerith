@@ -26,8 +26,9 @@ const ANSWER: Duration = Duration::from_secs(5);
 /// How long a clip may take to show its first frame before the run fails.
 const FIRST_FRAME: Duration = Duration::from_secs(60);
 
-/// mpv's counters and figures that the bench reads every second, by property name.
-pub const MPV_COUNTERS: [&str; 8] = [
+/// mpv's counters and figures that the bench reads every second, by property name. A property
+/// whose value is true or false reads as 1 or 0.
+pub const MPV_COUNTERS: [&str; 9] = [
     "frame-drop-count",
     "decoder-frame-drop-count",
     "vo-delayed-frame-count",
@@ -36,6 +37,8 @@ pub const MPV_COUNTERS: [&str; 8] = [
     "time-pos",
     "estimated-display-fps",
     "video-speed-correction",
+    // Whether mpv times its frames by the display's refreshes: Aerith switches as it plays.
+    "display-sync-active",
 ];
 
 /// What mpv reports once the clip plays: the engine's own view of what it decodes and outputs.
@@ -225,7 +228,9 @@ impl Engine {
                 let mut counters = Counters::default();
                 for name in MPV_COUNTERS {
                     let answer = ipc.request(json!({"command": ["get_property", name]}), ANSWER)?;
-                    let value = (answer["error"] == "success").then(|| answer["data"].as_f64());
+                    let data = &answer["data"];
+                    let value = (answer["error"] == "success")
+                        .then(|| data.as_f64().or_else(|| data.as_bool().map(f64::from)));
                     counters.values.push((name.to_owned(), value.flatten()));
                 }
                 let idle =
@@ -462,6 +467,7 @@ mod tests {
                     Some("idle-active") => json!(false),
                     Some("vo-configured") => json!(true),
                     Some("avsync") => json!(-0.003),
+                    Some("display-sync-active") => json!(true),
                     _ => json!(null),
                 };
                 let error = if command[1] == "estimated-display-fps" {
@@ -503,6 +509,7 @@ mod tests {
         let value = |name: &str| counters.values.iter().find(|(n, _)| n == name).unwrap().1;
         assert_eq!(value("frame-drop-count"), Some(2.0));
         assert_eq!(value("avsync"), Some(-0.003));
+        assert_eq!(value("display-sync-active"), Some(1.0), "true reads as 1");
         assert_eq!(
             value("estimated-display-fps"),
             None,

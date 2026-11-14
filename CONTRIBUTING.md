@@ -170,7 +170,10 @@ the relay's asleep while paused. The headless output is 3840 × 2160, drawn by p
 few frames a second unless made smaller, as above. Figures there are not tier figures.
 
 KWin's virtual backend is a second compositor that runs there, with `wp_fifo_v1` and colour
-management, which the headless sway lacks. Start `kwin_wayland --virtual --width 1280 --height 720
+management, which the headless sway lacks. It also gives presentation times flagged as the
+display's own, with a refresh period, so that the relay's probe of the display's rate ends there
+(on a fixed rate) and mpv switches to display sync; under the headless sway, which gives neither,
+mpv stays under audio sync. Start `kwin_wayland --virtual --width 1280 --height 720
 --socket kw-test` from KWin's store path, which `readlink -f` of the one on `PATH` gives (the one
 in `/run/wrappers` carries capabilities), then the testbed with `WAYLAND_DISPLAY=kw-test`.
 
@@ -324,14 +327,20 @@ prints these figures for a log a run kept. `--frames 5,20,40` captures the frame
 instead of measuring the playback, as mpv draws them in its window.
 
 ```sh
-scripts/bench-window.sh <corpus> "<display>" [cadence|toggles|sync|frames]...
+scripts/bench-window.sh <corpus> "<display>" [cadence|toggles|sync|frames|rule]...
 ```
 
-runs M1.4b's measures at the screen's current rate: every SDR cadence clip in mpv alone and in
-Aerith in each order, 60 toggles of the controls, display sync, and the frames compared with mpv
-alone's (PSNR, `inf` for the same picture). `BENCH_SECONDS` sets each run's length (120 by
-default; about 80 minutes for every part); the script's header gives each part's time. It
-builds the testbed and puts it on `PATH` itself.
+runs M1.4b's and M1.4c's measures at the screen's current rate: every SDR cadence clip in mpv
+alone and in Aerith in each order, 60 toggles of the controls, mpv alone under display sync, the
+frames compared with mpv alone's (PSNR, `inf` for the same picture), and `rule`, M1.4c's: each
+SDR cadence clip in mpv alone under audio sync and under display sync, then in Aerith in the order
+above. Aerith chooses its own sync by the display's rate
+([ADR-0021](docs/adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)): an
+`--mpv-option video-sync=…` does not hold for it, as each source loads under audio sync. The
+result's `display_sync` is the share of mpv's readings, one a second, where it timed its frames by
+the display; the testbed's last line gives the relay's probes (`testbed.last.presentation`).
+`BENCH_SECONDS` sets each run's length (120 by default; about 2 hours 15 minutes for every part);
+the script's header gives each part's time. It builds the testbed and puts it on `PATH` itself.
 
 ### On the lowest laptop
 

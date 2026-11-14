@@ -2,8 +2,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
 # the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-# Measures Aerith inside its window, through aerith-testbed, against mpv alone (milestone M1.4b),
-# at the refresh rate the screen has now. Run it inside the bench's shell, on the machine's own
+# Measures Aerith inside its window, through aerith-testbed, against mpv alone (milestones M1.4b
+# and M1.4c), at the refresh rate the screen has now. Run it inside the bench's shell, on the machine's own
 # desktop session, with nothing else on the screen: each run takes the screen, fullscreen. No sound
 # plays: the players play into the bench's own silent PipeWire (ADR-0013).
 #
@@ -15,27 +15,31 @@
 #   cadence  every SDR clip at 23.976 to 60 fps, and the SDR 4K clip: mpv alone, then Aerith in
 #            each order of the surfaces;
 #   toggles  Aerith in each order, the controls shown and hidden 60 times on the 23.976 clip;
-#   sync     display sync (video-sync=display-resample) on the 23.976, 25 and 59.94 clips: mpv
-#            alone, then Aerith in each order;
+#   sync     mpv alone under display sync (video-sync=display-resample) on the 23.976, 25 and
+#            59.94 clips. Aerith chooses its sync by the display's rate (ADR-0021): each of its
+#            sources starts under audio sync, whatever mpv's command line says;
+#   rule     M1.4c's measure of that rule: every SDR clip at 23.976 to 60 fps, and the SDR 4K
+#            clip: mpv alone under audio sync, mpv alone under display sync, then Aerith in the
+#            order above (ADR-0019), which picks its own;
 #   frames   three frames of the SDR 4K clip and of the 23.976 clip, captured by mpv alone and by
 #            Aerith's mpv, and compared (PSNR; "inf" is the same picture). mpv alone's on-screen
 #            controller is turned off, as Aerith's is: it shows over the first frame after a load.
 # BENCH_SECONDS sets the length of each playing run (120 by default). With it at 120, the parts
-# take about 55, 5, 20 and 3 minutes.
+# take about 55, 5, 7, 3 and 55 minutes; at 60, about half.
 # BENCH_MPV_OPTIONS adds options to every mpv, alone and Aerith's, as `name=value` separated by
 # spaces: in agent-headless, without a GPU, mpv needs `gpu-sw=yes`.
 # Results go to target/bench/window-<date>/, one folder per run, and table.md beside them.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-usage() { echo "usage: scripts/bench-window.sh <corpus> <display> [cadence|toggles|sync|frames]..." >&2; exit 2; }
+usage() { echo "usage: scripts/bench-window.sh <corpus> <display> [cadence|toggles|sync|frames|rule]..." >&2; exit 2; }
 [ $# -ge 2 ] || usage
 corpus=$1 display=$2
 shift 2
 parts=("$@")
 [ ${#parts[@]} -gt 0 ] || parts=(cadence toggles sync frames)
 for part in "${parts[@]}"; do
-    case "$part" in cadence | toggles | sync | frames) ;; *) usage ;; esac
+    case "$part" in cadence | toggles | sync | frames | rule) ;; *) usage ;; esac
 done
 [ -d "$corpus" ] || { echo "$corpus: no such corpus; make it with scripts/corpus.sh" >&2; exit 1; }
 seconds=${BENCH_SECONDS:-120}
@@ -99,7 +103,16 @@ for part in "${parts[@]}"; do
             ;;
         sync)
             for rate in 23.976 25 59.94; do
-                each "cadence-$rate-1080p-h264-aac.mkv" "$seconds" --mpv-option video-sync=display-resample
+                measure mpv "cadence-$rate-1080p-h264-aac.mkv" "$seconds" --mpv-option video-sync=display-resample
+            done
+            ;;
+        rule)
+            for clip in cadence-{23.976,24,25,29.97,50,59.94,60}-1080p-h264-aac.mkv sdr-2160p-hevc10-eac3.mkv; do
+                length=$seconds
+                [ "$clip" != sdr-2160p-hevc10-eac3.mkv ] || length=$((seconds < 55 ? seconds : 55))
+                measure mpv "$clip" "$length"
+                measure mpv "$clip" "$length" --mpv-option video-sync=display-resample
+                measure aerith "$clip" "$length" --order above
             done
             ;;
         frames)
