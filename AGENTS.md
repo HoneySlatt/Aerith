@@ -13,7 +13,8 @@ be written on uwui, the owner's UI framework, which is not ready yet. It is lice
 Its real state: the design is done; the Cargo workspace and its checks exist (M1.1); the bench,
 `aerith-bench`, measures the rivals (M1.2); `aerith-player` drives mpv on Linux (M1.3) and shows its
 picture in a plane of an interface's window, through a Wayland relay, under `aerith-testbed`, a test
-window (M1.4a). Stage 1, the player on the desktop, is under way.
+window (M1.4a); it chooses mpv's sync by the display's rate (M1.4c). Stage 1, the player on the
+desktop, is under way.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
 understand it from the repository alone. Documentation is part of every deliverable.

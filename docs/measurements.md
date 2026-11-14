@@ -765,3 +765,108 @@ On 2026-11-14, `aerith-testbed` with mpv on lavapipe, a 24 fps clip of mpv's own
 `aerith-bench run aerith` under KWin's virtual backend, `cadence-24-1080p-h264-aac`, 10 s: the
 probe told a fixed rate in 1,358 ms, and mpv's `display-sync-active` read true in every reading
 from the second on (`display_sync.active_share` 1.0 over the 8 readings counted).
+
+### The rule on the desktop at 240 Hz
+
+Measured on 2026-11-14 from 06:25 to 06:54 CET on the owner's desktop under Umbriel, through
+`owner-desktop`, by `BENCH_SECONDS=60 scripts/bench-window.sh <corpus> "<display>" rule`
+(`1785788`): DP-3 at 240.016 Hz, a fixed rate (a 10 s run of mpv alone first: 100 % of its
+intervals whole), scale 1.5. Aerith in the order above, under its rule; mpv alone under audio
+sync and under display sync. 60 s a run, the first 2 s left out. The machine was quiet at the
+start; other sessions' builds and tests then kept 0.2 to 12.5 hardware threads busy (last column):
+**only the 23.976 fps runs, and the 24 fps runs but their last seconds, are quiet figures.**
+`window-20261114T052527Z`, kept outside the repository.
+
+Under display sync, the refresh gaps say nothing of the picture's cadence; mpv's delayed and
+mistimed frames do. Every Aerith run told a fixed rate, and mpv's `display-sync-active` read true
+in every reading counted (100 %).
+
+| Clip | Player | Delayed / mistimed (mpv) | Sync, max | Scanned out | GPU power over idle | Other programs, threads |
+|---|---|---|---|---|---|---|
+| cadence-23.976 | mpv alone, audio sync | 0 / 0, 118 of 1,386 gaps off cadence | 0.01 ms | 0 of 1,387 | 1.84 W | 0.16 |
+| cadence-23.976 | mpv alone, display sync | 9 / 1 | 4.52 ms | 0 of 13,892 | 9.64 W | 0.79 |
+| cadence-23.976 | Aerith | 0 / 1 | 2.85 ms | 12,759 of 13,900 | 8.71 W | 0.39 |
+| cadence-24 | mpv alone, display sync | 5 / 1 | 11.23 ms | 0 of 13,911 | 10.70 W | 0.52 |
+| cadence-24 | Aerith | 12 / 2 | 22.37 ms | 10,895 of 13,890 | 9.54 W | 1.37 |
+| cadence-25 | mpv alone, display sync | 65 / 9 | 17.49 ms | 0 of 13,823 | 12.24 W | 2.27 |
+| cadence-25 | Aerith | 110 / 16 | 20.55 ms | 12,316 of 13,721 | 9.14 W | 4.13 |
+| cadence-29.97 | mpv alone, display sync | 8 / 1 | 7.95 ms | 0 of 13,895 | 11.26 W | 2.59 |
+| cadence-29.97 | Aerith | 71 / 14 | 22.05 ms | 9,526 of 13,835 | 12.27 W | 3.50 |
+| cadence-50 | mpv alone, display sync | 9 / 6 | 13.18 ms | 0 of 13,876 | 14.21 W | 2.39 |
+| cadence-50 | Aerith | 40 / 4 | 15.89 ms | 13,814 of 13,862 | 11.52 W | 4.76 |
+| cadence-59.94 | mpv alone, display sync | 222 / 25 | 25.62 ms | 0 of 13,351 | 14.36 W | 6.40 |
+| cadence-59.94 | Aerith | 298 / 55 | 20.25 ms | 13,282 of 13,332 | 12.10 W | 8.69 |
+| cadence-60 | mpv alone, display sync | 44 / 7 | 19.43 ms | 0 of 13,852 | 14.07 W | 2.26 |
+| cadence-60 | Aerith | 8 / 1 | 16.17 ms | 13,850 of 13,903 | 11.74 W | 2.42 |
+| sdr-2160p | mpv alone, display sync | 115 / 13 | 19.60 ms | 0 of 12,463 | 12.26 W | 4.60 |
+| sdr-2160p | Aerith | 37 / 10 | 19.36 ms | 12,602 of 12,642 | 10.07 W | 2.81 |
+
+mpv alone under audio sync, the rule's alternative at a fixed rate, had 0 frames delayed and its
+sync under 0.7 ms, but 1 % (25 and 50 fps) to 37 % (59.94 fps) of its refresh gaps off cadence,
+13 % at 24 fps and 9 % at 23.976 fps on a quiet machine, as at M1.4b.
+
+- **The rule holds at a fixed rate.** Aerith told a fixed rate in 523 to 1,303 ms from the first
+  frame, 0.52 s at 59.94 and 60 fps and about 1.3 s at 23.976 to 25 fps, and played under display
+  sync from then on.
+- **On a quiet machine, the floor holds**: on `cadence-23.976`, Aerith delayed no frame and its
+  sync stayed within 2.85 ms, better than mpv alone under display sync (9 delayed, 4.52 ms).
+- **Under load, both miss it alike.** The frames delayed fell almost all in seconds where other
+  programs took 2 to 15 threads; mpv's sync estimate then reached 15 to 26 ms, past the ±20 ms
+  floor in some runs of either player. The 24 fps run of Aerith delayed its 12 frames in its last
+  seconds, as another session took up to 15 threads.
+- Aerith's plane was scanned out for 69 % to 100 % of its frames; mpv alone, never. Aerith drew
+  0.9 to 3.1 W less than mpv alone under display sync on every clip but 29.97 fps.
+- The relay's thread woke 853 to 1,083 times a second, the window's thread 277 to 359.
+
+### The rule on the desktop under VRR
+
+Measured on 2026-11-14 from 06:59 to 07:28 CET, the same way, after the owner turned VRR on: DP-3
+with VRR up to 240.016 Hz (a 10 s run of mpv alone first: 9 % of its intervals whole, the refresh
+period given 4.1664 ms). A first attempt played on DP-2, where the focus was; it was stopped and
+left out. Other sessions kept 0.8 to 15.5 hardware threads busy, by the owner's choice to measure
+all the same: **only the runs with under about 2 threads (24 to 50 fps) are quiet figures**.
+`window-20261114T055854Z`, kept outside the repository.
+
+Under audio sync, the spans tell the cadence: the time between two presented frames against
+their frame periods, more than half a refresh off ([`presentation.rs`](../crates/aerith-bench/src/presentation.rs)).
+Every Aerith run told VRR, and mpv's `display-sync-active` read false in every reading (0 %).
+
+| Clip | Player | Spans off by more than half a refresh | Delayed / mistimed (mpv) | Sync, max | Scanned out | GPU power over idle | Other programs, threads |
+|---|---|---|---|---|---|---|---|
+| cadence-23.976 | mpv alone, audio sync | 244 of 1,371 | 0 / 0 | 0.04 ms | 0 of 1,372 | 3.25 W | 7.33 |
+| cadence-23.976 | mpv alone, display sync | – | 480 / 69 | 26.91 ms | 0 of 13,121 | 12.58 W | 8.89 |
+| cadence-23.976 | Aerith | 223 of 1,361 | 0 / 0 | 0.03 ms | 1,357 of 1,362 | 3.00 W | 11.96 |
+| cadence-24 | mpv alone, audio sync | 440 of 1,365 | 0 / 0 | 0.02 ms | 0 of 1,366 | 2.66 W | 15.48 |
+| cadence-24 | mpv alone, display sync | – | 583 / 58 | 74.66 ms | 0 of 12,498 | 12.60 W | 13.80 |
+| cadence-24 | Aerith | 29 of 1,387 | 0 / 0 | 0.01 ms | 1,229 of 1,388 | 2.95 W | 0.85 |
+| cadence-25 | mpv alone, audio sync | 3 of 1,445 | 0 / 0 | 0.02 ms | 0 of 1,446 | 2.23 W | 0.79 |
+| cadence-25 | mpv alone, display sync | – | 3 / 1 | 6.56 ms | 0 of 13,913 | 12.65 W | 1.44 |
+| cadence-25 | Aerith | 34 of 1,438 | 0 / 0 | 0.02 ms | 1,383 of 1,439 | 2.45 W | 2.22 |
+| cadence-29.97 | mpv alone, audio sync | 10 of 1,733 | 0 / 0 | 0.01 ms | 0 of 1,734 | 3.07 W | 1.74 |
+| cadence-29.97 | mpv alone, display sync | – | 0 / 1 | 7.21 ms | 0 of 13,913 | 11.90 W | 1.55 |
+| cadence-29.97 | Aerith | 4 of 1,735 | 0 / 0 | 0.01 ms | 1,730 of 1,736 | 3.41 W | 1.52 |
+| cadence-50 | mpv alone, audio sync | 0 of 2,896 | 0 / 0 | 0.01 ms | 0 of 2,897 | 5.53 W | 1.62 |
+| cadence-50 | mpv alone, display sync | – | 15 / 1 | 8.02 ms | 0 of 13,897 | 12.65 W | 1.67 |
+| cadence-50 | Aerith | 20 of 2,893 | 0 / 0 | 0.01 ms | 2,884 of 2,894 | 5.24 W | 1.57 |
+| cadence-59.94 | mpv alone, audio sync | 110 of 3,466 | 0 / 0 | 0.01 ms | 0 of 3,467 | 5.95 W | 4.24 |
+| cadence-59.94 | mpv alone, display sync | – | 26 / 3 | 16.58 ms | 0 of 13,905 | 13.58 W | 3.56 |
+| cadence-59.94 | Aerith | 732 of 3,285 | 0 / 0 | 0.02 ms | 154 of 3,286 | 6.75 W | 9.85 |
+| cadence-60 | mpv alone, audio sync | 306 of 3,462 | 0 / 0 | 0.02 ms | 0 of 3,463 | 6.49 W | 5.93 |
+| cadence-60 | mpv alone, display sync | – | 237 / 22 | 20.91 ms | 0 of 13,567 | 13.89 W | 5.84 |
+| cadence-60 | Aerith | 323 of 3,456 | 0 / 0 | 0.02 ms | 3,444 of 3,457 | 5.50 W | 6.67 |
+| sdr-2160p | mpv alone, audio sync | 219 of 1,260 | 0 / 0 | 0.02 ms | 0 of 1,261 | 3.56 W | 7.13 |
+| sdr-2160p | mpv alone, display sync | – | 384 / 35 | 26.42 ms | 0 of 11,738 | 11.71 W | 6.33 |
+| sdr-2160p | Aerith | 121 of 1,263 | 0 / 0 | 0.02 ms | 1,264 of 1,264 | 3.34 W | 10.74 |
+
+- **The rule holds under VRR.** Aerith told VRR in 521 to 1,346 ms and stayed under audio sync,
+  which cost it 7 to 10 W less than display sync and kept its sync within 0.03 ms.
+- **On the quiet runs, the cadence holds**: 0.2 % to 2.4 % of spans off for Aerith (24 to 50
+  fps), against 0 % to 0.6 % for mpv alone on its quiet runs (25 to 50 fps): Aerith is a little
+  behind mpv alone
+  at 25 and 50 fps (34 and 20 spans against 3 and 0), ahead at 29.97 fps. Each figure is one run.
+- **Under load, the spans grow for every player under audio sync** (3 % to 32 %), and display
+  sync under VRR is worse still: up to 583 frames delayed a minute and sync up to 75 ms where
+  other programs took 4 to 14 threads. That is what the rule spares Aerith.
+- Aerith's plane was scanned out for 88 % to 100 % of its frames but at 59.94 fps (5 %), the most
+  loaded of its runs.
+- The relay's thread woke 114 to 334 times a second, the window's 57 to 167.
