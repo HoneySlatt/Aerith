@@ -23,23 +23,28 @@
 #            order above (ADR-0019), which picks its own;
 #   frames   three frames of the SDR 4K clip and of the 23.976 clip, captured by mpv alone and by
 #            Aerith's mpv, and compared (PSNR; "inf" is the same picture). mpv alone's on-screen
-#            controller is turned off, as Aerith's is: it shows over the first frame after a load.
+#            controller is turned off, as Aerith's is: it shows over the first frame after a load;
+#   hdr      M1.5a's: every HDR and Dolby Vision clip, mpv alone then Aerith in the order above,
+#            each result's `colour` holding the descriptions mpv set (ADR-0024); then three
+#            frames of the HDR10, Dolby Vision 8.1 and real clips, compared as in `frames`. Run it
+#            once with the screen in SDR and once in HDR: what mpv sets follows the display.
 # BENCH_SECONDS sets the length of each playing run (120 by default). With it at 120, the parts
-# take about 55, 5, 7, 3 and 55 minutes; at 60, about half.
+# take about 55, 5, 7, 3, 55 and 25 minutes; at 60, about half, but `hdr`, whose clips last a
+# minute, about 20.
 # BENCH_MPV_OPTIONS adds options to every mpv, alone and Aerith's, as `name=value` separated by
 # spaces: in agent-headless, without a GPU, mpv needs `gpu-sw=yes`.
 # Results go to target/bench/window-<date>/, one folder per run, and table.md beside them.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-usage() { echo "usage: scripts/bench-window.sh <corpus> <display> [cadence|toggles|sync|frames|rule]..." >&2; exit 2; }
+usage() { echo "usage: scripts/bench-window.sh <corpus> <display> [cadence|toggles|sync|frames|rule|hdr]..." >&2; exit 2; }
 [ $# -ge 2 ] || usage
 corpus=$1 display=$2
 shift 2
 parts=("$@")
-[ ${#parts[@]} -gt 0 ] || parts=(cadence toggles sync frames rule)
+[ ${#parts[@]} -gt 0 ] || parts=(cadence toggles sync frames rule hdr)
 for part in "${parts[@]}"; do
-    case "$part" in cadence | toggles | sync | frames | rule) ;; *) usage ;; esac
+    case "$part" in cadence | toggles | sync | frames | rule | hdr) ;; *) usage ;; esac
 done
 [ -d "$corpus" ] || { echo "$corpus: no such corpus; make it with scripts/corpus.sh" >&2; exit 1; }
 seconds=${BENCH_SECONDS:-120}
@@ -123,6 +128,21 @@ for part in "${parts[@]}"; do
                 # long enough for three exact seeks and captures on a slow machine.
                 measure mpv "$clip" 60 --idle 0 --frames 5,20,40 --mpv-option osc=no
                 measure aerith "$clip" 60 --idle 0 --frames 5,20,40 --mpv-option osc=no
+            done
+            ;;
+        hdr)
+            # The colour clips last 60 s, the fetched Dolby Vision 7 ones about one.
+            for clip in hdr10-2160p-hevc10-eac3.mkv hdr10plus-2160p-hevc10-eac3.mkv \
+                hlg-2160p-hevc10-eac3.mkv dv5-2160p-hevc10-eac3.mkv dv8.1-2160p-hevc10-eac3.mkv \
+                dv8.4-2160p-hevc10-eac3.mkv dv7-2160p.mkv dv7-1080p.ts \
+                real-cosmos-laundromat-hdr10.mkv; do
+                measure mpv "$clip" "$((seconds < 55 ? seconds : 55))"
+                measure aerith "$clip" "$((seconds < 55 ? seconds : 55))" --order above
+            done
+            for clip in hdr10-2160p-hevc10-eac3.mkv dv8.1-2160p-hevc10-eac3.mkv \
+                real-cosmos-laundromat-hdr10.mkv; do
+                measure mpv "$clip" 60 --idle 0 --frames 5,20,40 --mpv-option osc=no
+                measure aerith "$clip" 60 --idle 0 --frames 5,20,40 --mpv-option osc=no --order above
             done
             ;;
     esac

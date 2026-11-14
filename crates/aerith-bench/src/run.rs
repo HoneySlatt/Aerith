@@ -25,6 +25,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use crate::audio::{self, SilentAudio};
+use crate::colour;
 use crate::engine::Counters;
 use crate::figures;
 use crate::presentation;
@@ -35,8 +36,9 @@ use crate::sandbox::Sandbox;
 use crate::serve::ClipServer;
 
 /// The version of `result.json`'s layout; a change to its fields raises it. 3 added
-/// `display_sync` and the `display-sync-active` readings (M1.4c).
-pub const RESULT_FORMAT: u32 = 3;
+/// `display_sync` and the `display-sync-active` readings (M1.4c); 4 added `colour`, the colour
+/// descriptions mpv set (M1.5a).
+pub const RESULT_FORMAT: u32 = 4;
 /// When the engine is asked what it decodes and outputs, after the first frame: once it settled.
 const REPORT_AFTER: Duration = Duration::from_secs(2);
 /// The first seconds of frames presented that the figures leave out: the start settles.
@@ -185,6 +187,12 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
         ),
         _ => Value::Null,
     };
+    // mpv sets its colour description at the start, before the window of the figures: the whole
+    // log is read.
+    let colour = match &wayland_log {
+        Some(log) => colour::figures(&String::from_utf8_lossy(&fs::read(log)?)),
+        None => Value::Null,
+    };
     let ideal_gap = presentation["refresh_ms"]
         .as_f64()
         .zip(frame_rate)
@@ -223,6 +231,7 @@ pub fn run(options: &RunOptions) -> io::Result<PathBuf> {
         "frames": frames,
         "presentation": presentation,
         "presentation_source": wayland_log.as_ref().map(|_| "the compositor's presentation feedback to mpv, from mpv's WAYLAND_DEBUG log, the first 2 s left out"),
+        "colour": colour,
         "testbed": testbed,
         "sync": figures::sync_figures(logged_sync.as_deref().unwrap_or(&avsync)),
         "display_sync": display_sync,

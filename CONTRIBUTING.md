@@ -323,7 +323,9 @@ cadence are counted). mpv asks for feedback on most frames, not all, and on one 
 fifo: a gap is measured only
 between two frames that both have it. For Aerith, the relay's own count, with feedback on every
 frame, is in the result's `testbed.relay_presentation`. `aerith-bench presentation <log> [rate]`
-prints these figures for a log a run kept. `--frames 5,20,40` captures the frames at those times
+prints these figures for a log a run kept. From the same log, the result's `colour` holds the colour
+descriptions mpv set on its surface, each with the compositor's answer, and the one the compositor
+preferred (`src/colour.rs`): mpv alone's and Aerith's compare as they are. `--frames 5,20,40` captures the frames at those times
 instead of measuring the playback, as mpv draws them in its window.
 
 ```sh

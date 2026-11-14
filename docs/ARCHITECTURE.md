@@ -185,8 +185,9 @@ rival, and watching the testbed's mpv over an IPC socket of the bench's.
   rival or Aerith's testbed, `engine` drives the rival's engine over
   `json_stream` (mpv's IPC, Kodi's JSON-RPC), `sampler` reads memory, CPU and GPU power each
   second, `serve` serves the clip over HTTP when the run is a stream, `presentation` reads the
-  compositor's presentation feedback from mpv's Wayland log, and `figures` turns the readings into
-  the figures of `result.json`.
+  compositor's presentation feedback from mpv's Wayland log, `colour` the colour descriptions mpv
+  set on its surface and the one the compositor preferred, from the same log, and `figures` turns
+  the readings into the figures of `result.json`.
 - `scripts/corpus.sh` makes the corpus it plays ([ADR-0012](adr/0012-the-test-corpus.md));
   `scripts/bench-rivals.sh` runs its set of measures on every rival; `scripts/bench-window.sh`
   measures Aerith inside its window against mpv alone.
