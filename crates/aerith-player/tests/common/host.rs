@@ -80,6 +80,16 @@ pub const HOST_WAIT: Duration = Duration::from_secs(10);
 /// The refresh rate the fake output announces, in mHz.
 pub const REFRESH_MHZ: i32 = 60_000;
 
+/// The refresh period presentations give, in nanoseconds.
+pub const REFRESH_NS: u64 = 16_666_666;
+
+/// The fake output's size, which a surface fills when fullscreen.
+pub const OUTPUT_SIZE: (i32, i32) = (1920, 1080);
+
+/// Under VRR, the time from one frame presented to the next: a 24 fps film's period, 2.5 refreshes,
+/// so that no frame shows at a refresh of the fixed rate.
+pub const VRR_FRAME_NS: u64 = 41_666_667;
+
 /// What the fake compositor saw, and how it answers.
 #[derive(Default)]
 pub struct Recorded {
@@ -100,6 +110,17 @@ pub struct Recorded {
     pub msc: u64,
     /// Whether presentations carry no refresh counter, as KWin 6.8's do: only their time.
     pub no_msc: bool,
+    /// At a fixed rate, the refreshes from one frame presented to the next; 0 counts as 1.
+    pub refreshes_a_frame: u64,
+    /// Whether the display runs under VRR: each frame [`VRR_FRAME_NS`] after the last, between
+    /// the fixed rate's refreshes.
+    pub vrr: bool,
+    /// Whether VRR turns on while a surface with a viewport fills the output, and off when its
+    /// viewport makes it smaller, at its commit, as KWin's automatic VRR does for fullscreen
+    /// windows.
+    pub vrr_while_fullscreen: bool,
+    /// When the last frame was presented, in nanoseconds; 0 before the first.
+    presented_at: u64,
     regions: HashMap<ObjectId, Vec<[i32; 4]>>,
     pools: HashMap<ObjectId, i32>,
     /// The dmabuf parameters objects alive, and the planes added to each.
@@ -205,16 +226,28 @@ impl Recorded {
         }
     }
 
-    /// Presents every committed feedback, one refresh later.
+    /// Presents every committed feedback: at the next frame's refresh at a fixed rate, from 1 s,
+    /// or between refreshes under VRR. The refresh counter counts the display's refreshes.
     fn present(&mut self) {
-        self.msc += 1;
+        let last = if self.presented_at == 0 {
+            1_000_000_000
+        } else {
+            self.presented_at
+        };
+        let refreshes = self.refreshes_a_frame.max(1);
+        let at = if self.vrr {
+            self.msc += 1;
+            last + VRR_FRAME_NS
+        } else {
+            self.msc += refreshes;
+            last + refreshes * REFRESH_NS
+        };
+        self.presented_at = at;
         let mut flags = Kind::Vsync | Kind::HwClock | Kind::HwCompletion;
         if self.zero_copy {
             flags |= Kind::ZeroCopy;
         }
         let msc = self.msc;
-        // Each refresh 16,666,666 ns after the last, from 1 s.
-        let at = 1_000_000_000 + msc * 16_666_666;
         let (seconds, nanoseconds) = ((at / 1_000_000_000) as u32, (at % 1_000_000_000) as u32);
         let counter = if self.no_msc { 0 } else { msc };
         for surface in &mut self.surfaces {
@@ -224,7 +257,7 @@ impl Recorded {
                         0,
                         seconds,
                         nanoseconds,
-                        16_666_666,
+                        REFRESH_NS as u32,
                         (counter >> 32) as u32,
                         counter as u32,
                         flags,
@@ -335,8 +368,8 @@ impl FakeHost {
             for output in &recorded.outputs {
                 output.mode(
                     wl_output::Mode::Current | wl_output::Mode::Preferred,
-                    1920,
-                    1080,
+                    OUTPUT_SIZE.0,
+                    OUTPUT_SIZE.1,
                     REFRESH_MHZ,
                 );
                 if let Some(description) = description {
@@ -637,8 +670,8 @@ impl GlobalDispatch<WlOutput, ()> for HostState {
         );
         output.mode(
             wl_output::Mode::Current | wl_output::Mode::Preferred,
-            1920,
-            1080,
+            OUTPUT_SIZE.0,
+            OUTPUT_SIZE.1,
             REFRESH_MHZ,
         );
         output.scale(1);
@@ -903,6 +936,12 @@ fn commit(recorded: &mut Recorded, resource: &WlSurface) {
     }
     surface.callbacks.extend(pending.callbacks);
     surface.feedbacks.extend(pending.feedbacks);
+    let destination = surface.destination;
+    if recorded.vrr_while_fullscreen
+        && let Some(destination) = destination
+    {
+        recorded.vrr = destination == OUTPUT_SIZE;
+    }
     if answer {
         if let Some(old) = replaced
             && let Some(buffer) = recorded.buffers.get(&old)

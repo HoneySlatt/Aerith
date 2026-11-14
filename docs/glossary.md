@@ -32,6 +32,9 @@ The terms Aerith coins or uses in a sense of its own.
 - **Audio sync, display sync**: mpv timing each frame by the sound's clock, or by the display's
   refreshes, resampling the sound to match
   ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)).
+- **Probe**: the relay's reading of 24 intervals between presented frames, under audio sync, that
+  tells whether the display runs at a fixed rate or under VRR
+  ([ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md)).
 - **Bench**: the tool of Stage 1, `aerith-bench`, and its scripts, that play the corpus and measure
   the budgets ([ADR-0013](adr/0013-the-bench.md)).
 - **Corpus**: the clips the bench plays, each with its source and licence

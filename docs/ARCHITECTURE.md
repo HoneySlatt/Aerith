@@ -50,6 +50,19 @@ caller ◀── Event (Started, Clock, Report…) ─────────�
   ([ADR-0016](adr/0016-the-clock-carries-the-engines-rate.md)).
 - When mpv ends, the reader sees the connection close; the engine thread reaps mpv and sends
   `EngineFailed`. When the player is dropped, it closes the connection; mpv quits.
+- With a plane, the engine thread chooses mpv's sync by the display's rate
+  ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md),
+  [ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md)):
+
+  ```text
+  load (video-sync=audio) ─▶ first frame ─▶ probe n asked of the relay ─▶ relay: Rate(n, fixed) ─▶ video-sync=display-resample
+  relay: Changed ─▶ (under display sync: video-sync=audio, then) probe n+1 asked
+  ```
+
+  Each source loads under audio sync, an option of its load that mpv restores at its end. The
+  relay's news reach the engine thread's inbox like mpv's messages; the engine thread asks for a
+  probe through a function the relay hands it at start. A verdict on a probe other than the last
+  asked is dropped. Without a plane, mpv stays under audio sync.
 
 ### The relay
 
@@ -113,6 +126,16 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   It also wakes for each request of mpv's, and once after each change of the interface's that mpv
   is told of (a new size, shown, hidden). This is ADR-0015's design, where the relay's queue
   shares the window's connection; M1.4b measures it while a film plays.
+- The relay tells the display's rate (`src/relay/rate.rs`,
+  [ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md)). When the
+  engine thread asks, mpv under audio sync, the relay's probe lets 8 frames go by, then reads 24
+  intervals between frames presented one after the other, from the compositor's presentation
+  feedback: at least half within 50 µs of a whole number of refreshes is a fixed rate, fewer is
+  VRR. It tells the verdict once. A new size of the plane, an output entered or left, or a new
+  refresh period in the presentations, restarts a probe under way, or, after one, is told to the
+  engine thread once as a change. The verdicts and their time are counted in
+  `Plane::presentation`, for the bench. The probe needs no timer: it reads the frames as their
+  feedback comes.
 - `Plane::close`, or dropping the player, stops the thread, ends mpv's connection, and destroys
   everything the relay made on the window's connection, before it returns. mpv takes the end of
   its connection as its window closed, and quits: the player reports `EngineFailed`. The

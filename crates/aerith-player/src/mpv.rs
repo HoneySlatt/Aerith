@@ -25,11 +25,18 @@
 //! source carry the number of the open it came from, and each open ends with exactly one `Ended`,
 //! even when a later open replaces it before it loads.
 //!
+//! **Display sync.** With a plane, mpv plays each source under audio sync, its default, until the
+//! relay tells the display's rate: the engine thread asks the relay for a probe at the source's
+//! first frame, and switches mpv to display sync (`video-sync=display-resample`) when the display
+//! runs at a fixed rate. When the window or its display changes, it switches mpv back to audio
+//! sync and probes again ([ADR-0021]).
+//!
 //! **Secrets.** A stream's URL and headers travel over the connection only, never on mpv's command
 //! line, in its title or in a log; the headers are options of their own load, which no other
 //! source carries.
 //!
 //! [ADR-0003]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0003-mpv-in-its-own-process.md
+//! [ADR-0021]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -49,9 +56,9 @@ use serde_json::{Value, json};
 use crate::event::{
     AudioFormat, AudioReport, Clock, Colour, Ending, Event, OpenId, Report, VideoReport,
 };
-use crate::plane::Plane;
+use crate::plane::{DisplayRate, Plane};
 use crate::player::{Audio, Command, EngineGone, Settings, Video};
-use crate::relay::Relay;
+use crate::relay::{DisplayNews, Relay};
 use crate::source::{Header, Kind, Source};
 
 /// The largest message accepted from mpv, in bytes. Its messages are a few hundred bytes; a larger
@@ -175,6 +182,11 @@ enum Message {
     Received(Value),
     /// mpv's connection broke, for this reason.
     Disconnected(String),
+    /// How to ask the relay for a probe of the display's rate, sent once, with a plane, before
+    /// any command.
+    Probes(Box<dyn Fn(u64) + Send>),
+    /// What the relay tells of the display.
+    Display(DisplayNews),
     /// The player is dropped: mpv is to quit.
     Close,
 }
@@ -224,8 +236,12 @@ impl Engine {
             // mpv holds its end now; the relay sees mpv's connection close when mpv ends.
             drop(mpv_end);
             let failed = relay_failure(engine.inbox.clone());
+            let display_news = relay_display_news(engine.inbox.clone());
             // A relay that cannot start ends the engine with it: dropping it ends mpv.
-            engine.plane = Some(Plane::new(Relay::start(window, relay_end, failed)?));
+            let relay = Relay::start(window, relay_end, failed, display_news)?;
+            // Before any command: the player's caller has not had the engine yet.
+            let _ = engine.inbox.send(Message::Probes(relay.probes()));
+            engine.plane = Some(Plane::new(relay));
         }
         Ok((engine, events))
     }
@@ -331,6 +347,14 @@ impl Drop for Engine {
 fn relay_failure(inbox: Sender<Message>) -> Box<dyn Fn(String) + Send> {
     Box::new(move |reason| {
         let _ = inbox.send(Message::Disconnected(reason));
+    })
+}
+
+/// What the relay calls with its news of the display: they reach the engine thread in order with
+/// mpv's messages.
+fn relay_display_news(inbox: Sender<Message>) -> Box<dyn Fn(DisplayNews) + Send> {
+    Box::new(move |news| {
+        let _ = inbox.send(Message::Display(news));
     })
 }
 
@@ -440,6 +464,8 @@ enum Pending {
         name: &'static str,
         last: bool,
     },
+    /// mpv's sync set for this open: display sync, or audio sync before a probe.
+    Sync { open: OpenId, display: bool },
     /// An answer nothing depends on: the setup, a stop.
     Ignored,
 }
@@ -497,6 +523,14 @@ struct Session {
     report: Option<Report>,
     /// Whether the current source's lost picture was reported.
     picture_failed: bool,
+    /// How to ask the relay for a probe of the display's rate; `None` without a plane, where mpv
+    /// stays under audio sync.
+    probes: Option<Box<dyn Fn(u64) + Send>>,
+    /// The number of the last probe asked for: the relay's verdict on any other is stale.
+    probe: u64,
+    /// Whether mpv was set to display sync for the current source. Each source starts under
+    /// audio sync, an option of its own load.
+    display_sync: bool,
 }
 
 impl Session {
@@ -520,6 +554,9 @@ impl Session {
             properties: HashMap::new(),
             report: None,
             picture_failed: false,
+            probes: None,
+            probe: 0,
+            display_sync: false,
         }
     }
 
@@ -541,6 +578,8 @@ impl Session {
             match message {
                 Message::Command(command) => self.command(command),
                 Message::Received(value) => self.received(&value),
+                Message::Probes(probes) => self.probes = Some(probes),
+                Message::Display(news) => self.display_news(news),
                 Message::Disconnected(reason) => {
                     // mpv quits at the end of its connection: close it before waiting, so that an
                     // mpv that still runs is not kept waiting the whole grace.
@@ -602,6 +641,10 @@ impl Session {
                 // The headers are options of this load only: mpv sets them for its file and
                 // restores them after, so that no other source ever carries them.
                 let mut options = serde_json::Map::new();
+                // Each source starts under audio sync, until the relay tells the display's rate;
+                // an option of the load, mpv restores it at the source's end, whatever it was
+                // set to during it.
+                options.insert("video-sync".to_owned(), Value::from("audio"));
                 if !headers.is_empty() {
                     options.insert(
                         "http-header-fields".to_owned(),
@@ -751,6 +794,21 @@ impl Session {
                     }
                 }
             }
+            Some(Pending::Sync { open, display }) if self.current == Some(open) => {
+                if !success {
+                    self.display_sync = false;
+                    self.emit(Event::Refused {
+                        command: "video-sync",
+                        reason: error(),
+                    });
+                    return;
+                }
+                if !display {
+                    self.ask_probe();
+                }
+                // The clock's rate follows mpv's correction, which display sync changes.
+                self.ask_position();
+            }
             Some(Pending::Position(open)) if success && self.current == Some(open) => {
                 if let Some(seconds) = answer["data"].as_f64() {
                     self.clock_read(open, seconds);
@@ -823,12 +881,14 @@ impl Session {
                 self.read_at = None;
                 self.picture_failed = false;
                 self.properties.clear();
+                self.display_sync = false;
             }
             "playback-restart" => {
                 if let Some(open) = self.current.filter(|_| !self.started) {
                     self.started = true;
                     self.emit(Event::Started(open));
                     self.read_report();
+                    self.ask_probe();
                 }
                 self.ask_position();
             }
@@ -871,6 +931,46 @@ impl Session {
             }
             _ => {}
         }
+    }
+
+    /// Asks the relay for a probe of the display's rate, mpv under audio sync, if there is a
+    /// plane.
+    fn ask_probe(&mut self) {
+        if let Some(probes) = &self.probes {
+            self.probe += 1;
+            probes(self.probe);
+        }
+    }
+
+    /// Acts on the relay's news of the display, for the source playing: display sync at a fixed
+    /// rate; after a change, audio sync again, and a new probe.
+    fn display_news(&mut self, news: DisplayNews) {
+        let Some(open) = self.current.filter(|_| self.started) else {
+            return;
+        };
+        match news {
+            DisplayNews::Rate {
+                probe,
+                rate: DisplayRate::Fixed,
+            } if probe == self.probe && !self.display_sync => {
+                self.set_sync(open, true);
+            }
+            // Under VRR mpv stays under audio sync; a verdict on an older probe is stale.
+            DisplayNews::Rate { .. } => {}
+            DisplayNews::Changed if self.display_sync => self.set_sync(open, false),
+            DisplayNews::Changed => self.ask_probe(),
+        }
+    }
+
+    /// Sets mpv's sync for `open`: display sync, or audio sync, after which the relay probes again
+    /// once mpv has answered.
+    fn set_sync(&mut self, open: OpenId, display: bool) {
+        self.display_sync = display;
+        let value = if display { "display-resample" } else { "audio" };
+        self.request(
+            Pending::Sync { open, display },
+            json!(["set_property", "video-sync", value]),
+        );
     }
 
     /// Ends the opens sent before `open` that never started loading: mpv dropped them when a
@@ -1037,6 +1137,7 @@ mod tests {
     use super::*;
     use crate::source::{Header, Source};
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     const WAIT: Duration = Duration::from_secs(5);
 
@@ -1371,7 +1472,7 @@ mod tests {
         assert_eq!(
             mpv.load(1)["command"],
             json!({"name": "loadfile", "url": "/corpus/clip.mkv", "flags": "replace",
-                   "index": -1, "options": {}})
+                   "index": -1, "options": {"video-sync": "audio"}})
         );
         mpv.send(json!({"event": "start-file", "playlist_entry_id": 1}));
         mpv.property("core-idle", json!(false));
@@ -1413,12 +1514,15 @@ mod tests {
             mpv.load(1)["command"],
             json!({"name": "loadfile", "url": "https://example.org/a.mkv?key=1",
                    "flags": "replace", "index": -1,
-                   "options": {"http-header-fields":
+                   "options": {"video-sync": "audio", "http-header-fields":
                        r"Authorization: Bearer token\, with a comma,Referer: https://example.org/"}})
         );
         // No global option is set: nothing else carries them.
         engine.open(file("/b.mkv")).unwrap();
-        assert_eq!(mpv.load(2)["command"]["options"], json!({}));
+        assert_eq!(
+            mpv.load(2)["command"]["options"],
+            json!({"video-sync": "audio"})
+        );
     }
 
     #[test]
@@ -2036,5 +2140,215 @@ mod tests {
         );
         // Closing is no failure: the events end without one.
         assert_eq!(events.recv_timeout(WAIT).ok(), None);
+    }
+
+    /// The probes the engine asked the relay for, by number, standing for the relay.
+    type Probes = Arc<Mutex<Vec<u64>>>;
+
+    /// Gives the engine a relay that records the probes it is asked for, as a plane's would.
+    fn with_probes(engine: &Engine) -> Probes {
+        let probes = Probes::default();
+        let asked = Arc::clone(&probes);
+        engine
+            .inbox
+            .send(Message::Probes(Box::new(move |number| {
+                asked.lock().unwrap().push(number);
+            })))
+            .unwrap();
+        probes
+    }
+
+    /// Tells the engine what the relay would.
+    fn tell(engine: &Engine, news: DisplayNews) {
+        engine.inbox.send(Message::Display(news)).unwrap();
+    }
+
+    fn fixed(probe: u64) -> DisplayNews {
+        DisplayNews::Rate {
+            probe,
+            rate: DisplayRate::Fixed,
+        }
+    }
+
+    /// Waits until the engine asked for `count` probes, and returns them.
+    fn probes_asked(probes: &Probes, count: usize) -> Vec<u64> {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let asked = probes.lock().unwrap().clone();
+            if asked.len() >= count {
+                return asked;
+            }
+            assert!(Instant::now() < deadline, "probes asked: {asked:?}");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Answers the next command, which must set `video-sync` to `value`, as `error` says.
+    fn sync_set(mpv: &mut FakeMpv, value: &str, error: &str) {
+        let command = mpv.command();
+        assert_eq!(
+            command["command"],
+            json!(["set_property", "video-sync", value])
+        );
+        mpv.answer(&command, error, Value::Null);
+    }
+
+    #[test]
+    fn a_fixed_rate_switches_mpv_to_display_sync_and_reads_the_clock_again() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        let open = start(&engine, &mut mpv, &events, 1, &json!({}));
+        assert_eq!(probes_asked(&probes, 1), [1], "a probe at the first frame");
+        tell(&engine, fixed(1));
+        sync_set(&mut mpv, "display-resample", "success");
+        mpv.position_at_rate(3.0, json!(1.0), json!(1.001));
+        let Event::Clock(clock_open, clock) = next(&events) else {
+            panic!("a clock")
+        };
+        assert_eq!((clock_open, clock.rate), (open, 1.001));
+        // Seeking brings no new probe; the next source does.
+        mpv.send(json!({"event": "playback-restart"}));
+        mpv.position(4.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        assert_eq!(probes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn under_vrr_and_on_a_stale_verdict_mpv_stays_under_audio_sync() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        tell(
+            &engine,
+            DisplayNews::Rate {
+                probe: 1,
+                rate: DisplayRate::Variable,
+            },
+        );
+        // A verdict on another probe than the last asked says nothing of the display now.
+        tell(&engine, fixed(0));
+        tell(&engine, fixed(2));
+        mpv.silent(Duration::from_millis(300));
+        quiet(&events);
+    }
+
+    #[test]
+    fn a_change_under_display_sync_brings_audio_sync_then_a_new_probe() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        tell(&engine, fixed(1));
+        sync_set(&mut mpv, "display-resample", "success");
+        mpv.position(1.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        tell(&engine, DisplayNews::Changed);
+        let questions = {
+            let command = mpv.command();
+            assert_eq!(
+                command["command"],
+                json!(["set_property", "video-sync", "audio"])
+            );
+            // The new probe waits for mpv's answer: mpv may still present under display sync.
+            thread::sleep(Duration::from_millis(100));
+            assert_eq!(probes.lock().unwrap().len(), 1);
+            mpv.answer(&command, "success", Value::Null);
+            mpv.clock_questions()
+        };
+        assert_eq!(probes_asked(&probes, 2), [1, 2]);
+        mpv.answer_clock(&questions, 2.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        // The display is fixed still: display sync again.
+        tell(&engine, fixed(2));
+        sync_set(&mut mpv, "display-resample", "success");
+    }
+
+    #[test]
+    fn a_change_under_audio_sync_brings_a_new_probe_alone() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        tell(&engine, DisplayNews::Changed);
+        assert_eq!(probes_asked(&probes, 2), [1, 2]);
+        mpv.silent(Duration::from_millis(300));
+        // The verdict on the first probe came late: stale.
+        tell(&engine, fixed(1));
+        mpv.silent(Duration::from_millis(300));
+    }
+
+    #[test]
+    fn news_without_a_source_playing_are_dropped() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        tell(&engine, DisplayNews::Changed);
+        tell(&engine, fixed(0));
+        mpv.silent(Duration::from_millis(300));
+        assert!(probes.lock().unwrap().is_empty());
+        let open = start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "eof"}));
+        assert_eq!(next(&events), Event::Ended(open, Ending::Finished));
+        tell(&engine, fixed(1));
+        tell(&engine, DisplayNews::Changed);
+        mpv.silent(Duration::from_millis(300));
+        assert_eq!(probes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn each_source_starts_under_audio_sync_and_probes_again() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        tell(&engine, fixed(1));
+        sync_set(&mut mpv, "display-resample", "success");
+        mpv.position(1.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        // The next source: its load asks for audio sync, mpv restoring it at the first's end.
+        let open = engine.open(file("/corpus/next.mkv")).unwrap();
+        assert_eq!(mpv.load(2)["command"]["options"]["video-sync"], "audio");
+        mpv.send(json!({"event": "end-file", "playlist_entry_id": 1, "reason": "stop"}));
+        assert!(matches!(next(&events), Event::Ended(_, Ending::Stopped)));
+        mpv.send(json!({"event": "start-file", "playlist_entry_id": 2}));
+        mpv.send(json!({"event": "playback-restart"}));
+        assert_eq!(next(&events), Event::Started(open));
+        assert_eq!(probes_asked(&probes, 2), [1, 2]);
+        // A change before the new verdict asks for no audio sync: mpv is under it already.
+        tell(&engine, DisplayNews::Changed);
+        mpv.report_read(&json!({}));
+        mpv.position(0.0);
+        assert!(matches!(next(&events), Event::Clock(..)));
+        assert_eq!(probes_asked(&probes, 3), [1, 2, 3]);
+        mpv.silent(Duration::from_millis(300));
+    }
+
+    #[test]
+    fn a_refused_sync_is_reported_and_mpv_counted_under_audio_sync() {
+        let (engine, events, mut mpv) = driven(exited());
+        let probes = with_probes(&engine);
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        probes_asked(&probes, 1);
+        tell(&engine, fixed(1));
+        sync_set(&mut mpv, "display-resample", "property unavailable");
+        assert_eq!(
+            next(&events),
+            Event::Refused {
+                command: "video-sync",
+                reason: "property unavailable".to_owned()
+            }
+        );
+        // Under audio sync still, a change needs a new probe only.
+        tell(&engine, DisplayNews::Changed);
+        assert_eq!(probes_asked(&probes, 2), [1, 2]);
+        mpv.silent(Duration::from_millis(300));
+    }
+
+    #[test]
+    fn without_a_plane_no_probe_is_asked() {
+        let (engine, events, mut mpv) = driven(exited());
+        start(&engine, &mut mpv, &events, 1, &json!({}));
+        mpv.silent(Duration::from_millis(300));
     }
 }

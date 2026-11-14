@@ -46,6 +46,7 @@
 
 mod check;
 mod host;
+mod rate;
 mod serve;
 mod shell;
 mod socket;
@@ -60,6 +61,7 @@ use std::os::fd::{BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use rustix::event::{PollFd, PollFlags};
 use wayland_client::backend::{Backend, ObjectId as HostId, WaylandError};
@@ -82,6 +84,7 @@ use wayland_server::{Display, DisplayHandle};
 
 use crate::plane::{Presentation, Window};
 use host::{FeedbackCache, HostGlobals};
+pub(crate) use rate::DisplayNews;
 use socket::{MpvSocket, Read};
 use surface::{PlaneState, Region, Surface};
 
@@ -149,6 +152,10 @@ pub(super) struct State {
     presentation: Presentation,
     /// How the last frame was presented.
     last_presented: Option<surface::Presented>,
+    /// The probe of the display's rate, when the last one was asked for, and where its news go.
+    probe: rate::Probe,
+    probe_asked: Option<Instant>,
+    display_news: Box<dyn Fn(DisplayNews) + Send>,
     /// mpv's live objects and the pools' file descriptors held, against their ceilings.
     objects: usize,
     fds: usize,
@@ -264,13 +271,16 @@ impl ClientData for MpvClient {
 impl Relay {
     /// Joins the window's connection, makes the plane's surface on it, hidden, and starts the
     /// relay's thread, which serves mpv on `mpv`. `failed` is called once, from the relay's
-    /// thread, if the relay ends mpv's connection or loses the window's. A start that fails leaves
-    /// nothing of the relay's on the window's connection but what the protocol cannot destroy: a
-    /// registry, and the `wl_compositor` once bound.
+    /// thread, if the relay ends mpv's connection or loses the window's. `display_news` is called
+    /// with what the relay tells of the display ([`DisplayNews`]), from the relay's thread or the
+    /// interface's, the relay's lock held: it must not wait. A start that fails leaves nothing of
+    /// the relay's on the window's connection but what the protocol cannot destroy: a registry,
+    /// and the `wl_compositor` once bound.
     pub(crate) fn start(
         window: Window,
         mpv: UnixStream,
         failed: Box<dyn Fn(String) + Send>,
+        display_news: Box<dyn Fn(DisplayNews) + Send>,
     ) -> io::Result<Self> {
         // SAFETY: `Window::new`'s contract keeps the display alive until the plane is closed, and
         // the relay drops this backend when the plane closes (`close`), before the interface
@@ -308,6 +318,9 @@ impl Relay {
             serial: 0,
             presentation: Presentation::default(),
             last_presented: None,
+            probe: rate::Probe::default(),
+            probe_asked: None,
+            display_news,
             objects: 0,
             fds: 0,
             fds_taken: 0,
@@ -376,6 +389,20 @@ impl Relay {
     /// What the compositor reported of mpv's frames so far.
     pub(crate) fn presentation(&self) -> Presentation {
         lock(&self.shared).presentation
+    }
+
+    /// How the player asks for a probe of the display's rate, from its own thread: the number it
+    /// gives comes back with the verdict, in [`DisplayNews::Rate`]. mpv must be under audio sync
+    /// from then on ([`rate`]). Nothing happens once the plane is closed.
+    pub(crate) fn probes(&self) -> Box<dyn Fn(u64) + Send> {
+        let shared = Arc::clone(&self.shared);
+        Box::new(move |number| {
+            let mut state = lock(&shared);
+            if !state.plane.closed {
+                state.probe.watch(number);
+                state.probe_asked = Some(Instant::now());
+            }
+        })
     }
 
     /// Whether the plane is closed, for the tests.
@@ -706,6 +733,23 @@ fn poll_until_ready(fds: &mut [PollFd<'_>]) -> io::Result<()> {
 }
 
 impl State {
+    /// Tells the player the probe's news, and keeps the verdict's figures.
+    pub(super) fn tell(&mut self, news: Option<DisplayNews>) {
+        let Some(news) = news else { return };
+        if let DisplayNews::Rate { rate, .. } = news {
+            self.presentation.probes += 1;
+            self.presentation.display_rate = Some(rate);
+            self.presentation.last_probe = self.probe_asked.take().map(|asked| asked.elapsed());
+        }
+        (self.display_news)(news);
+    }
+
+    /// The window or its display changed: the plane's size, or the outputs it is on.
+    pub(super) fn display_changed(&mut self) {
+        let news = self.probe.changed();
+        self.tell(news);
+    }
+
     /// Counts one of mpv's objects, created by the request being handled, and ends mpv's
     /// connection past the ceiling. Returns whether to make it.
     pub(super) fn admit_object(&mut self, client: &wayland_server::Client) -> bool {

@@ -63,7 +63,7 @@ pub use event::{
     AudioFormat, AudioReport, Clock, Colour, Ending, Event, OpenId, Report, VideoReport,
 };
 #[cfg(target_os = "linux")]
-pub use plane::{COUNTED_GAPS, InvalidPlace, Plane, Presentation, Window};
+pub use plane::{COUNTED_GAPS, DisplayRate, InvalidPlace, Plane, Presentation, Window};
 #[cfg(target_os = "linux")]
 pub use player::{Audio, EngineGone, Player, Settings, Video};
 pub use source::{Header, InvalidSource, LONGEST_HEADER, LONGEST_URL, MOST_HEADERS, Source};
@@ -87,7 +87,7 @@ pub mod fuzzing {
         mpv: UnixStream,
         failed: Box<dyn Fn(String) + Send>,
     ) -> io::Result<Plane> {
-        let relay = Relay::start(window, mpv, failed)?;
+        let relay = Relay::start(window, mpv, failed, Box::new(|_| {}))?;
         relay.change(|state| state.take_memory_as_dmabuf());
         Ok(Plane::new(relay))
     }

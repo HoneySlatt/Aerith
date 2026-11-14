@@ -718,3 +718,50 @@ spans say nothing of the picture's cadence; mpv's own counters do:
 - Under audio sync, mpv's sync estimate never passed 0.09 ms in any series of this milestone.
 - Umbriel scanned the order above out under VRR too, but not always: 402 of 1,253 frames of the
   4K clip.
+
+## M1.4c — Display sync by the display's rate
+
+### The detection, calibrated on M1.4b's logs
+
+Read on 2026-11-14 from the logs M1.4b's runs kept (`mpv-wayland.log`, every presentation mpv
+received), outside the repository: Umbriel at 240 Hz (`window-20261112T014314Z`,
+`window-finish240-20261112T041825Z`), KWin at 240 Hz (`window-20261112T051424Z`,
+`window-kwin-20261112T054906Z`), KWin under VRR (`window-20261112T062420Z`) and Umbriel under VRR
+(`window-20261112T074630Z`). An interval is the time between two frames presented one after the
+other; it is whole within a tolerance of a whole number of the refresh period the compositor gave.
+Runs under display sync are left out of the VRR figures, which they cannot show.
+
+| | Fixed rate, audio sync | VRR, audio sync | VRR, display sync |
+|---|---|---|---|
+| Intervals within 0.05 refresh (208 µs), per run | 100 % | 2 % to 12 % | 98 % to 100 % |
+| Intervals within 0.01 refresh (42 µs), per run | 100 % | 0 % to 2 % | 98 % to 100 % |
+| Farthest from a whole number of refreshes | 6.1 µs | – | – |
+
+The most whole intervals in any window of consecutive intervals, under VRR and audio sync, against
+the fewest at a fixed rate (always every one):
+
+| Window | Within 50 µs | Within 100 µs | Within 200 µs |
+|---|---|---|---|
+| 16 intervals | 25 % | 31 % | 44 % |
+| 24 intervals | 17 % | 25 % | 38 % |
+
+- Every presentation on both compositors carried `vsync`, `hw_clock` and `hw_completion`, and a
+  refresh period of 4,166,388 ns, at a fixed rate and under VRR alike.
+- No clip's rate made VRR look fixed: at 24 and 60 fps, whose periods are whole numbers of 240 Hz
+  refreshes, VRR's intervals scatter as much as at 25 fps.
+- From these, the relay's probe reads 24 intervals within 50 µs, half of them whole for a fixed
+  rate ([ADR-0022](adr/0022-the-relay-tells-the-display-s-rate-when-the-player-asks.md)).
+
+### Without a GPU, in `agent-headless`
+
+On 2026-11-14, `aerith-testbed` with mpv on lavapipe, a 24 fps clip of mpv's own encoder at
+1280 × 720, the order above, other sessions building beside it:
+
+| Compositor | Presentations | Probe's verdict | Its time, from the first frame | mpv |
+|---|---|---|---|---|
+| sway, headless | no flag, no refresh period | none after 174 frames | – | audio sync throughout |
+| KWin 6.8.2, virtual | `vsync`, `hw_clock`, 60 Hz | fixed rate | 1,307 ms | `video-sync=display-resample` at 2.6 s, then 60 presents a second |
+
+`aerith-bench run aerith` under KWin's virtual backend, `cadence-24-1080p-h264-aac`, 10 s: the
+probe told a fixed rate in 1,358 ms, and mpv's `display-sync-active` read true in every reading
+from the second on (`display_sync.active_share` 1.0 over the 8 readings counted).

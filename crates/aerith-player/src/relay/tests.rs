@@ -51,10 +51,11 @@ use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
 
+use super::rate::{INTERVALS, SETTLE};
 use super::socket::{MOST_FDS_AT_ONCE, MOST_REGISTRIES, MOST_REQUESTS_AT_ONCE};
-use super::{MOST_OBJECTS, MOST_QUEUED_FDS, Relay};
-use crate::plane::{Plane, Window};
-use host::{FakeHost, Interface};
+use super::{DisplayNews, MOST_OBJECTS, MOST_QUEUED_FDS, Relay};
+use crate::plane::{DisplayRate, Plane, Window};
+use host::{FakeHost, Interface, OUTPUT_SIZE};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -213,11 +214,22 @@ fn named_memory(name: &str, size: u64) -> OwnedFd {
 /// What the relay reported as mpv's failure.
 type Failures = Arc<Mutex<Vec<String>>>;
 
+/// What the relay told of the display.
+type News = Arc<Mutex<Vec<DisplayNews>>>;
+
 /// The relay on `interface`'s window, a fake mpv connected to it, and what it reports.
 fn relay(interface: &Interface) -> (Plane, FakeMpv, Failures) {
+    let (plane, mpv, failures, _) = relay_telling(interface);
+    (plane, mpv, failures)
+}
+
+/// [`relay`], and what the relay tells of the display.
+fn relay_telling(interface: &Interface) -> (Plane, FakeMpv, Failures, News) {
     let (relay_end, mpv_end) = UnixStream::pair().unwrap();
     let failures = Failures::default();
     let recorded = Arc::clone(&failures);
+    let news = News::default();
+    let told = Arc::clone(&news);
     let (display, parent, below) = interface.handles();
     // SAFETY: the interface's display and surfaces outlive the plane: each test keeps the
     // interface until after the plane is closed or dropped.
@@ -226,9 +238,10 @@ fn relay(interface: &Interface) -> (Plane, FakeMpv, Failures) {
         window,
         relay_end,
         Box::new(move |reason| recorded.lock().unwrap().push(reason)),
+        Box::new(move |news| told.lock().unwrap().push(news)),
     )
     .unwrap();
-    (Plane::new(relay), FakeMpv::connect(mpv_end), failures)
+    (Plane::new(relay), FakeMpv::connect(mpv_end), failures, news)
 }
 
 /// Waits for the relay to report mpv's failure, and returns it.
@@ -1520,6 +1533,7 @@ fn relay_after(
         window,
         relay_end,
         Box::new(move |reason| recorded.lock().unwrap().push(reason)),
+        Box::new(|_| {}),
     )
     .unwrap();
     (Plane::new(relay), mpv_end, failures)
@@ -1912,7 +1926,7 @@ fn a_start_on_a_compositor_without_a_viewporter_fails_and_leaves_nothing_bound()
     let (display, parent, below) = interface.handles();
     // SAFETY: the interface outlives the relay, which fails to start.
     let window = unsafe { Window::new(display, parent, below) };
-    let started = Relay::start(window, relay_end, Box::new(|_| {}));
+    let started = Relay::start(window, relay_end, Box::new(|_| {}), Box::new(|_| {}));
     let error = started.err().expect("no viewporter, no plane");
     assert!(error.to_string().contains("wp_viewporter"), "{error}");
     interface.roundtrip().unwrap();
@@ -2262,4 +2276,164 @@ impl Dispatch<WpFractionalScaleV1, ()> for Received {
             received.surface_events.push("preferred_scale");
         }
     }
+}
+
+/// A fake compositor, an interface, a shown plane at 320x180, a fake mpv with its toplevel
+/// configured, and what the relay tells of the display. Each commit is presented at once, at
+/// the fake display's pace.
+fn shown_telling() -> (FakeHost, Interface, Plane, FakeMpv, News, WlSurface) {
+    let host = FakeHost::start();
+    let interface = host.connect(true);
+    let (plane, mut mpv, _failures, news) = relay_telling(&interface);
+    plane.place(10, 20, 320, 180).unwrap();
+    plane.show();
+    interface.commit();
+    let (surface, _, _) = mpv.toplevel();
+    (host, interface, plane, mpv, news, surface)
+}
+
+/// Has mpv draw `count` frames on `surface`, each presented before the next.
+fn play(mpv: &mut FakeMpv, surface: &WlSurface, count: u32) {
+    let buffers = [mpv.shm_buffer(64, 48), mpv.shm_buffer(64, 48)];
+    for index in 0..count {
+        let presented = mpv.received.presented;
+        mpv.draw(surface, &buffers[index as usize % 2]);
+        mpv.wait("the frame's feedback", |r| r.presented > presented);
+    }
+}
+
+/// The frames a probe needs: its settle, the frame that starts its chain, then its intervals.
+const PROBED: u32 = SETTLE + 1 + INTERVALS;
+
+#[test]
+fn frames_at_whole_refreshes_tell_a_fixed_rate() {
+    let (host, _interface, plane, mut mpv, news, surface) = shown_telling();
+    host.with(|recorded| recorded.refreshes_a_frame = 3);
+    play(&mut mpv, &surface, 5);
+    plane.relay().probes()(1);
+    play(&mut mpv, &surface, PROBED - 1);
+    assert!(news.lock().unwrap().is_empty(), "one frame short");
+    play(&mut mpv, &surface, 1);
+    let rate = DisplayRate::Fixed;
+    assert_eq!(
+        *news.lock().unwrap(),
+        [DisplayNews::Rate { probe: 1, rate }]
+    );
+    let counts = plane.presentation();
+    assert_eq!((counts.probes, counts.display_rate), (1, Some(rate)));
+    assert!(counts.last_probe.is_some());
+    // A probe tells once.
+    play(&mut mpv, &surface, PROBED);
+    assert_eq!(news.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn frames_between_refreshes_tell_vrr() {
+    let (host, _interface, plane, mut mpv, news, surface) = shown_telling();
+    host.with(|recorded| recorded.vrr = true);
+    plane.relay().probes()(4);
+    play(&mut mpv, &surface, PROBED);
+    let rate = DisplayRate::Variable;
+    assert_eq!(
+        *news.lock().unwrap(),
+        [DisplayNews::Rate { probe: 4, rate }]
+    );
+    assert_eq!(plane.presentation().display_rate, Some(rate));
+}
+
+#[test]
+fn nothing_is_told_without_a_probe_asked() {
+    let (_host, _interface, plane, mut mpv, news, surface) = shown_telling();
+    play(&mut mpv, &surface, 2 * PROBED);
+    plane.place(0, 0, 640, 360).unwrap();
+    play(&mut mpv, &surface, 2);
+    assert!(news.lock().unwrap().is_empty());
+    assert_eq!(plane.presentation().probes, 0);
+}
+
+#[test]
+fn vrr_that_turns_on_with_fullscreen_is_told_after_the_change() {
+    let (host, interface, plane, mut mpv, news, surface) = shown_telling();
+    host.with(|recorded| recorded.vrr_while_fullscreen = true);
+    plane.relay().probes()(1);
+    play(&mut mpv, &surface, PROBED);
+    let fixed = DisplayNews::Rate {
+        probe: 1,
+        rate: DisplayRate::Fixed,
+    };
+    assert_eq!(*news.lock().unwrap(), [fixed]);
+    // The window goes fullscreen: the plane fills the output, and the compositor turns VRR on.
+    plane
+        .place(0, 0, OUTPUT_SIZE.0 as u32, OUTPUT_SIZE.1 as u32)
+        .unwrap();
+    interface.commit();
+    assert_eq!(*news.lock().unwrap(), [fixed, DisplayNews::Changed]);
+    // A second change before the player asks again is not told again.
+    plane.place(0, 0, 800, 600).unwrap();
+    plane
+        .place(0, 0, OUTPUT_SIZE.0 as u32, OUTPUT_SIZE.1 as u32)
+        .unwrap();
+    interface.commit();
+    assert_eq!(news.lock().unwrap().len(), 2);
+    // The player switched mpv to audio sync, and asks again.
+    plane.relay().probes()(2);
+    play(&mut mpv, &surface, PROBED);
+    host.with(|recorded| assert!(recorded.vrr, "the fake compositor's VRR is on"));
+    let variable = DisplayNews::Rate {
+        probe: 2,
+        rate: DisplayRate::Variable,
+    };
+    assert_eq!(
+        *news.lock().unwrap(),
+        [fixed, DisplayNews::Changed, variable]
+    );
+    assert_eq!(plane.presentation().probes, 2);
+}
+
+#[test]
+fn a_change_during_a_probe_starts_it_again_untold() {
+    let (host, interface, plane, mut mpv, news, surface) = shown_telling();
+    plane.relay().probes()(1);
+    play(&mut mpv, &surface, PROBED - 1);
+    // A new size, and VRR on: the frames before say nothing of the display after.
+    host.with(|recorded| recorded.vrr = true);
+    plane.place(0, 0, 640, 360).unwrap();
+    interface.commit();
+    play(&mut mpv, &surface, PROBED - 1);
+    assert!(
+        news.lock().unwrap().is_empty(),
+        "{:?}",
+        news.lock().unwrap()
+    );
+    play(&mut mpv, &surface, 1);
+    let rate = DisplayRate::Variable;
+    assert_eq!(
+        *news.lock().unwrap(),
+        [DisplayNews::Rate { probe: 1, rate }]
+    );
+}
+
+#[test]
+fn leaving_an_output_after_a_probe_is_a_change() {
+    let (host, _interface, plane, mut mpv, news, surface) = shown_telling();
+    plane.relay().probes()(1);
+    play(&mut mpv, &surface, PROBED);
+    host.leave_outputs();
+    let deadline = Instant::now() + WAIT;
+    while news.lock().unwrap().len() < 2 {
+        assert!(Instant::now() < deadline, "{:?}", news.lock().unwrap());
+        mpv.roundtrip().unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(news.lock().unwrap()[1], DisplayNews::Changed);
+}
+
+#[test]
+fn a_probe_asked_after_the_plane_closed_does_nothing() {
+    let (_host, _interface, plane, _mpv, news, _surface) = shown_telling();
+    let probes = plane.relay().probes();
+    plane.close();
+    probes(1);
+    assert!(news.lock().unwrap().is_empty());
+    assert_eq!(plane.presentation().probes, 0);
 }

@@ -13,6 +13,7 @@
 use std::ffi::c_void;
 use std::fmt;
 use std::ptr::NonNull;
+use std::time::Duration;
 
 use raw_window_handle::{WaylandDisplayHandle, WaylandWindowHandle};
 
@@ -182,6 +183,26 @@ pub struct Presentation {
     pub gaps: [u64; COUNTED_GAPS],
     /// Gaps of [`COUNTED_GAPS`] refreshes or more.
     pub longer_gaps: u64,
+    /// The probes of the display's rate that ended: the player asks for one at each source's
+    /// first frame, and again when the window or its display changes ([`DisplayRate`]).
+    pub probes: u64,
+    /// The display's rate, as the last probe that ended told it.
+    pub display_rate: Option<DisplayRate>,
+    /// How long the last probe that ended took, from the player's request to its verdict.
+    pub last_probe: Option<Duration>,
+}
+
+/// Whether the display shows frames at a fixed refresh rate or under VRR, as the relay tells it
+/// from the times the compositor presented the engine's frames. The player plays under display
+/// sync at a fixed rate and under audio sync under VRR ([ADR-0021]).
+///
+/// [ADR-0021]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayRate {
+    /// Each frame shows at one of the display's refreshes, a fixed period apart.
+    Fixed,
+    /// The display refreshes when a frame comes (VRR, adaptive sync).
+    Variable,
 }
 
 /// A plane's width and height are between 1 and 2³¹ − 1.

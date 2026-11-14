@@ -47,6 +47,7 @@ use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, New, Resource};
 
 use super::check::{self, CommitState, Source};
 use super::host::{FeedbackEvent, FeedbackKind, HostCallback, replay_feedback};
+use super::rate::Timed;
 use super::{Buffer, Made, State};
 
 /// One of mpv's surfaces.
@@ -762,6 +763,7 @@ impl State {
             return;
         }
         self.plane.size = Some((width, height));
+        self.display_changed();
         // No check is needed before this commit: setting a destination only lifts one of the
         // compositor's checks (`check::commit`), and changes nothing the others look at.
         if self.plane.host_mapped && !self.plane.sync {
@@ -1189,8 +1191,14 @@ impl Presented {
 }
 
 impl State {
-    /// Counts a frame the compositor presented.
-    pub(super) fn count_presented(&mut self, presented: Presented, zero_copy: bool) {
+    /// Counts a frame the compositor presented, and has the probe of the display's rate read it:
+    /// `hardware_timed` says its time is the display's own (`vsync` and `hw_clock`).
+    pub(super) fn count_presented(
+        &mut self,
+        presented: Presented,
+        zero_copy: bool,
+        hardware_timed: bool,
+    ) {
         let counts = &mut self.presentation;
         counts.presented += 1;
         if zero_copy {
@@ -1209,6 +1217,12 @@ impl State {
             }
         }
         self.last_presented = Some(presented);
+        let timed = (hardware_timed && presented.refresh_ns > 0).then_some(Timed {
+            at_ns: presented.at_ns,
+            refresh_ns: presented.refresh_ns,
+        });
+        let news = self.probe.presented(timed);
+        self.tell(news);
     }
 }
 

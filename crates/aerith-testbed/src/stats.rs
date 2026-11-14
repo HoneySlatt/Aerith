@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::time::Duration;
 
-use aerith_player::Presentation;
+use aerith_player::{DisplayRate, Presentation};
 
 /// A thread's context switches, from `/proc/self/task/<tid>/status`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,12 +106,21 @@ fn fields(sample: &Sample) -> String {
             clock.position, clock.running, clock.rate
         )
     });
+    let display_rate = match presentation.display_rate {
+        None => "null",
+        Some(DisplayRate::Fixed) => "\"fixed\"",
+        Some(DisplayRate::Variable) => "\"variable\"",
+    };
+    let last_probe = presentation.last_probe.map_or("null".to_owned(), |probe| {
+        format!("{:.1}", probe.as_secs_f64() * 1000.0)
+    });
     let mut text = String::new();
     // Writing to a String cannot fail.
     let _ = write!(
         text,
         "\"since_open\":{:.3},\"presentation\":{{\"committed\":{},\"presented\":{},\
-         \"discarded\":{},\"zero_copy\":{},\"gaps\":[{}],\"longer_gaps\":{}}},\
+         \"discarded\":{},\"zero_copy\":{},\"gaps\":[{}],\"longer_gaps\":{},\"probes\":{},\
+         \"display_rate\":{},\"last_probe_ms\":{}}},\
          \"main_thread\":{},\"relay_thread\":{},\"clock\":{},\"ui_frames\":{},\
          \"ui_frames_late\":{}",
         sample.since_open.as_secs_f64(),
@@ -121,6 +130,9 @@ fn fields(sample: &Sample) -> String {
         presentation.zero_copy,
         gaps.join(","),
         presentation.longer_gaps,
+        presentation.probes,
+        display_rate,
+        last_probe,
         switches(sample.main_thread),
         switches(sample.relay_thread),
         clock,
@@ -147,6 +159,9 @@ mod tests {
                 zero_copy: 5,
                 gaps,
                 longer_gaps: 1,
+                probes: 1,
+                display_rate: Some(DisplayRate::Fixed),
+                last_probe: Some(Duration::from_micros(1_402_340)),
             },
             main_thread: Some(Switches {
                 voluntary: 310,
@@ -166,7 +181,8 @@ mod tests {
     const FIELDS: &str = "\"since_open\":3.000,\"presentation\":{\"committed\":72,\
         \"presented\":70,\"discarded\":2,\"zero_copy\":5,\
         \"gaps\":[0,0,0,0,0,0,0,0,0,0,12,11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\
-        \"longer_gaps\":1},\"main_thread\":{\"voluntary\":310,\"involuntary\":4},\
+        \"longer_gaps\":1,\"probes\":1,\"display_rate\":\"fixed\",\"last_probe_ms\":1402.3},\
+        \"main_thread\":{\"voluntary\":310,\"involuntary\":4},\
         \"relay_thread\":null,\"clock\":{\"position\":2.500,\"running\":true,\
         \"rate\":0.993170},\"ui_frames\":3,\"ui_frames_late\":0";
 

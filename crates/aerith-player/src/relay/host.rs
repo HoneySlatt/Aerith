@@ -539,10 +539,12 @@ impl Dispatch<WlSurface, ()> for State {
             wl_surface::Event::Enter { output } => {
                 state.host.entered.push(output.clone());
                 state.plane_entered(&output);
+                state.display_changed();
             }
             wl_surface::Event::Leave { output } => {
                 state.host.entered.retain(|entered| *entered != output);
                 state.plane_left(&output);
+                state.display_changed();
             }
             wl_surface::Event::PreferredBufferScale { factor } => {
                 state.host.preferred_buffer_scale = Some(factor);
@@ -700,6 +702,7 @@ impl Dispatch<WpPresentationFeedback, Vec<MpvFeedback>> for State {
                 let msc = (u64::from(seq_hi) << 32) | u64::from(seq_lo);
                 let seconds = (u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo);
                 let at_ns = u128::from(seconds) * 1_000_000_000 + u128::from(tv_nsec);
+                let hardware_timed = Kind::Vsync | Kind::HwClock;
                 state.count_presented(
                     Presented {
                         msc,
@@ -707,6 +710,7 @@ impl Dispatch<WpPresentationFeedback, Vec<MpvFeedback>> for State {
                         refresh_ns: refresh,
                     },
                     flags & Kind::ZeroCopy.bits() != 0,
+                    flags & hardware_timed.bits() == hardware_timed.bits(),
                 );
                 for feedback in alive() {
                     feedback.presented(
