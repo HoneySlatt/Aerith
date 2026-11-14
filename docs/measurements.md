@@ -870,3 +870,47 @@ Every Aerith run told VRR, and mpv's `display-sync-active` read false in every r
 - Aerith's plane was scanned out for 88 % to 100 % of its frames but at 59.94 fps (5 %), a loaded run
   (9.85 threads).
 - The relay's thread woke 114 to 334 times a second, the window's 57 to 167.
+
+## M1.5a — HDR and Dolby Vision through the relay
+
+### What mpv reports of Dolby Vision
+
+Read on 2026-11-14 with mpv 0.42.0 alone, `--vo=null --ao=null`, software decoding, the first five
+frames of each clip of the corpus: `video-params/colormatrix`, which reads `dolbyvision` when mpv
+reshapes the picture with its metadata, and the profile and level the track list declares.
+
+| Clip | `colormatrix` | Transfer, primaries | Declared profile, level |
+|---|---|---|---|
+| dv5-2160p-hevc10-eac3 | dolbyvision | pq, bt.2020 | 5, 6 |
+| dv8.1-2160p-hevc10-eac3 | dolbyvision | pq, bt.2020 | 8, 6 |
+| dv8.4-2160p-hevc10-eac3 | dolbyvision | pq, bt.2020 | 8, 6 |
+| dv7-2160p | dolbyvision | pq, bt.2020 | 7, 6 |
+| dv7-1080p.ts | bt.2020-ncl | pq, bt.2020 | none |
+| hdr10, hdr10plus | bt.2020-ncl | pq, bt.2020 | none |
+| hlg | bt.2020-ncl | hlg, bt.2020 | none |
+
+- mpv reports profile 8.4, whose base layer is HLG, as PQ: the reshaped picture's.
+- The fetched profile 7 sample in MPEG-TS declares nothing and mpv does not reshape it: the
+  player's report shows it as HDR10, which is what mpv shows.
+
+### Through the relay, without a screen
+
+On 2026-11-14 in `agent-headless`, under KWin 6.8.2's virtual backend (one SDR output, 1280 × 720
+at 60 Hz, colour management offered), mpv on lavapipe (`gpu-sw=yes`), `hdr10-2160p-hevc10-eac3`,
+by `aerith-bench run`, the relay at `67e9e4b`. The descriptions are the result's `colour`, read from
+mpv's own Wayland log.
+
+| | mpv alone | Aerith, order above |
+|---|---|---|
+| Preferred description mpv received | gamma 2.2 (2), sRGB (1), luminances 0.2 / 80 / 80 | the same |
+| Description mpv set | gamma 2.2, sRGB, `set_luminances(2000, 203, 203)`, ready | the same |
+| Descriptions refused | 0 | 0 |
+| "Dithering to 8 bit depth" in mpv's log | no | no (yes before M1.5a) |
+| Frames at 5, 20 and 40 s against mpv alone's | – | PSNR infinite: the same pictures |
+
+- On an SDR output, mpv tone-maps the HDR10 film itself and describes an SDR picture, with
+  luminances, as ADR-0024 expected; through the relay it does exactly what it does alone.
+- With `OFFER_SET_LUMINANCES` off, the same run sets the same description without
+  `set_luminances`: the build that the measure on Umbriel compares.
+- KWin's virtual output cannot be HDR: the PQ path is tested against the fake compositor only
+  (`src/relay/tests.rs`), and by hand on the owner's display.

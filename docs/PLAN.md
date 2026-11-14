@@ -251,6 +251,13 @@ on both tiers on Linux.
   under Umbriel with HDR on (about 40 min with the owner's look), and under KWin with HDR on
   (about 20 min). Each session on the owner's go.
 - **By hand.** The owner turns HDR on, and compares the clips by eye.
+- **Where it stands** (2026-11-14). Built and tested without a screen: the relay's colour
+  management, checked by a fresh reader and corrected (luminances compared in `f32`, as Umbriel
+  and wlroots compare them); the report's Dolby Vision; the bench's `colour` figures and
+  `bench-window.sh`'s `hdr` part. Under KWin's virtual backend, Aerith's mpv sets mpv alone's
+  description and draws the same frames
+  ([figures](measurements.md#m15a--hdr-and-dolby-vision-through-the-relay)). Left: the three
+  sessions on the owner's display, then `set_luminances` decided and ADR-0024 amended.
 
 ### M1.5b — Passthrough
 
@@ -374,8 +381,9 @@ on both tiers on Linux.
   leave mpv never told its outputs, and so the display's rate
   ([`surface.rs`](../crates/aerith-player/src/relay/surface.rs), `fractional_scale_owed`). Umbriel,
   KWin and the fake compositor all send it.
-- Without colour management, which the relay offers from M1.5, mpv inside Aerith dithers to 8
-  bits, and mpv alone does not: their frames differ by one step of 8 bits.
+- On a compositor without colour management (niri, on the lowest laptop), mpv dithers to 8 bits
+  alone and inside Aerith alike. Where the compositor offers it, the relay passes it on from
+  M1.5a, and their frames are the same ([figures](measurements.md#through-the-relay-without-a-screen)).
 - The window's thread wakes 52 to 135 times a second while a film plays under audio sync, 280 to
   580 under display sync at 240 Hz, for events addressed to mpv on the socket it shares with the
   relay. `wl-proxy` would spare it ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)). By
@@ -396,7 +404,14 @@ on both tiers on Linux.
   linux-dmabuf is older than version 4: mpv's OpenGL fallback cannot open a second connection
   ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
 - The 600 s run of the fuzz target explored inputs of 198 bytes at most, about a dozen messages;
-  CI's minute explores less.
+  CI's minute explores less. From `e3d0612` (M1.4b) to M1.5a, the target's prelude bound fifo as
+  `xdg_wm_base`, so every session ended in the prelude: the fuzzing of those milestones reached
+  almost none of the relay's handlers. M1.5a fixed it and made a refused prelude fail at once.
+- Once, under load, the existing test `an_output_the_compositor_removes_is_removed_for_mpv`
+  panicked inside wayland-backend (`client_impl/mod.rs:795`, "NULL user data on object
+  wl_output"), as an output went away; 300 runs alone and 100 loaded runs did not repeat it. If
+  the race lies in the relay's handling of a removed output, a monitor unplugged during a film
+  could panic the relay's thread. To reproduce and fix before Stage 1's audit.
 - `scripts/test-check.sh` copies `.git` with tar: in a git worktree, where `.git` is a file, its
   cases stage scratch files in the worktree's own index.
 - `scripts/check.sh` grew from 33 s to over three minutes: `scripts/test-check.sh` runs the whole
