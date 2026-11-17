@@ -13,7 +13,8 @@ be written on uwui, the owner's UI framework, which is not ready yet. It is lice
 Its real state: the design is done; the Cargo workspace and its checks exist (M1.1); the bench,
 `aerith-bench`, measures the rivals (M1.2); `aerith-player` drives mpv on Linux (M1.3) and shows its
 picture in a plane of an interface's window, through a Wayland relay, under `aerith-testbed`, a test
-window (M1.4a), measured there (M1.4b); the player chooses mpv's sync by the display's rate (M1.4c).
+window (M1.4a), measured there (M1.4b); the player chooses mpv's sync by the display's rate (M1.4c)
+and passes mpv's colour description to the plane (M1.5a, under way).
 Stage 1, the player on the desktop, is under way.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
@@ -74,7 +75,8 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 
 - The rest of Aerith reaches playback only through `aerith-player`; no engine detail leaks out.
 - Decoders written in C (mpv, FFmpeg, libass) and JavaScript plugins never run in the process that
-  holds tokens.
+  holds tokens, where the platform allows a separate process; elsewhere, that stage's ADR states
+  the risk that remains.
 - The core runs without a window, a GPU or the network, so that it is tested with local fakes.
 - Platform code (Kotlin, Swift, Windows) lives in its own folders, as thin as the platform allows.
 
@@ -97,7 +99,7 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 
 ## Code rules
 
-- No abstraction without a second concrete use.
+- No abstraction without a second concrete use; a test's fake counts as one.
 - No reimplementation of the standard library without a measurement.
 - A new dependency needs a reason, an alternative weighed and a license checked; ask the owner.
 - Every `unsafe` block has a `// SAFETY:` comment.
@@ -123,7 +125,7 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
   - the code's documentation: contracts, limits, figures;
   - `docs/ARCHITECTURE.md`: flows across parts;
   - ADRs: why a decision was taken, what was rejected; only their status changes later;
-  - `docs/PLAN.md`: status and known debt;
+  - `docs/PLAN.md`: status; `docs/debt.md`: known debt;
   - `CHANGELOG.md`: what changed for users, from the first release.
 - A change that leaves a document wrong is not finished.
 

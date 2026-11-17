@@ -2,16 +2,18 @@
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! The checks the relay makes on mpv's values before it issues anything on the window's
-//! connection: each refuses what wlroots 0.20 (the base of Umbriel, the owner's compositor) would
-//! raise as a protocol error, which would close the whole connection, and some more that the relay
-//! can tell cheaply. Colour management's checks are the union of what wlroots 0.20, Umbriel,
-//! KWin 6.8 and Yuna refuse ([ADR-0024]). A refusal ends mpv's connection, never the window's.
+//! connection: each refuses what wlroots 0.20 (the base of Umbriel, on which the relay was first
+//! run) would raise as a protocol error, which would close the whole connection, and some more
+//! that the relay can tell cheaply. Smithay's compositors (niri) are not checked yet
+//! ([ADR-0026]). Colour management's checks are the union of what wlroots 0.20, Umbriel,
+//! KWin 6.8 and Yuna refuse ([ADR-0027]). A refusal ends mpv's connection, never the window's.
 //!
 //! Each function names the code it mirrors. They take plain values and file descriptors, so that
 //! they are tested apart from any connection. The relay's fuzz target (`fuzz/`) reaches them
 //! through mpv's requests.
 //!
-//! [ADR-0024]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0024-the-relay-passes-mpvs-colour-description.md
+//! [ADR-0026]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0026-stage-1-measured-on-niri-and-kwin-the-full-series-on-yuna.md
+//! [ADR-0027]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md
 
 use std::os::fd::{AsFd, BorrowedFd};
 

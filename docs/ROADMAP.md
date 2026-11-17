@@ -57,7 +57,7 @@ starting points.
 
 | Tier | Machine | State |
 |---|---|---|
-| Desktop, high | The owner's desktop: 8 cores (Ryzen 7 5800X), an RX 6900 XT class GPU, 32 GB, 3840 × 2160 at 240 Hz, HDR monitor; Umbriel on wlroots 0.20. The monitor can do VRR, but the owner turned it off: it flickers. A VRR measure is taken only when the owner turns it on for it | measurable |
+| Desktop, high | The owner's desktop: 8 cores (Ryzen 7 5800X), an RX 6900 XT class GPU, 32 GB, 3840 × 2160 at 240 Hz, HDR monitor; niri since 2026-11-16 (Umbriel, on wlroots 0.20, before: M1.2 to M1.5a's figures), KWin 6.8 for HDR, Yuna once the owner uses it ([ADR-0026](adr/0026-stage-1-measured-on-niri-and-kwin-the-full-series-on-yuna.md)). The monitor can do VRR, which flickers; a fixed-rate or a VRR measure is taken as the owner sets the compositor for it | measurable |
 | Desktop, lowest | The owner's HP Laptop 17-ca2xxx: AMD Athlon Silver 3050U (2 cores), integrated Vega, 4 GB on one channel; NixOS with niri (Yuna later), its panel at 60 Hz, no colour management; measured on mains power | measurable |
 | Phone, high | The owner's Pixel (model recorded with the first measure) | measurable |
 | Phone, lowest | The owner's mid-range Android phone (model recorded with the first measure) | measurable |
@@ -128,7 +128,9 @@ Each is decided by an ADR at the stage where it becomes necessary, not earlier.
 
 | Topic | Candidates | Decide at |
 |---|---|---|
-| The Windows montage | mpv's child window under DirectComposition; other routes the bench finds | M1.6 |
+| The Windows montage | mpv's child window under DirectComposition; other routes the bench finds. An exploration by the owner comes before M1.5b | M1.6 |
+| The path of a stream's bytes | Aerith fetches the stream and serves it to mpv through a socket inside mpv's network namespace, so that mpv has no network and no token, if M1.5c's measure on the lowest laptop holds; else the I/O layer checks the stream and its redirects, then mpv fetches the final URL | Stage 2's first design session |
+| The desktop's processes | Which process holds tokens, which decodes, which runs plugins | Stage 2 |
 | Storage | SQLite (rusqlite) with a schema ready for sync: a clock per field, tombstones | Stage 2 |
 | The Stremio protocol | Aerith's own types from the specification, stremio-core's as a test oracle | Stage 2 |
 | Nuvio sync | Its Supabase API, tested against a pinned self-hosted backend | Stage 2 |
@@ -159,7 +161,9 @@ picture inside Aerith's window under a test interface, measured against the riva
 **Exit.** Every floor of the bench holds on the high tier and the lowest laptop, on Linux and
 Windows: the corpus plays with no unexplained frame dropped in 30 min at 60 Hz, 240 Hz and VRR,
 sound and image within ±20 ms, HDR and Dolby Vision clips with the colour description expected,
-passthrough identical; the figures are in `docs/measurements.md`.
+passthrough identical; the figures are in `docs/measurements.md`. On Linux, the floors hold on
+niri and on KWin, KWin the HDR reference; the full series of the high tier is taken on Yuna once
+the owner uses it ([ADR-0026](adr/0026-stage-1-measured-on-niri-and-kwin-the-full-series-on-yuna.md)).
 
 ### Stage 2 — The core
 

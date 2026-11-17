@@ -25,7 +25,7 @@
 #            Aerith's mpv, and compared (PSNR; "inf" is the same picture). mpv alone's on-screen
 #            controller is turned off, as Aerith's is: it shows over the first frame after a load;
 #   hdr      M1.5a's: every HDR and Dolby Vision clip, mpv alone then Aerith in the order above,
-#            each result's `colour` holding the descriptions mpv set (ADR-0024); then three
+#            each result's `colour` holding the descriptions mpv set (ADR-0027); then three
 #            frames of the HDR10, Dolby Vision 8.1 and real clips, compared as in `frames`. Run it
 #            once with the screen in SDR and once in HDR: what mpv sets follows the display.
 # BENCH_SECONDS sets the length of each playing run (120 by default). With it at 120, the parts

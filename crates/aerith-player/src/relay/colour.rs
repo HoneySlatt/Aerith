@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Colour management ([ADR-0024]): mpv's colour descriptions, checked and made again on the
+//! Colour management ([ADR-0027]): mpv's colour descriptions, checked and made again on the
 //! window's connection, and the plane's preferred description passed back to mpv.
 //!
 //! **What mpv is offered.** `wp_color_manager_v1`, at the version the relay bound on the window's
@@ -35,7 +35,7 @@
 //! as soon as it set it, before the commit that the relay issues it with. mpv's other surfaces
 //! keep their descriptions, checked, and never shown.
 //!
-//! [ADR-0024]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0024-the-relay-passes-mpvs-colour-description.md
+//! [ADR-0027]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md
 
 use std::collections::HashMap;
 use std::mem;
@@ -86,10 +86,10 @@ pub(super) const VERSION: u32 = 2;
 
 /// Whether mpv is offered `set_luminances` when the compositor advertises it. On Umbriel, a
 /// description with luminances ends the plane's scanout, and mpv sends them whenever they are
-/// offered ([ADR-0024]): the owner decides on a measure whether mpv keeps them. `false` withholds
+/// offered ([ADR-0027]): the owner decides on a measure whether mpv keeps them. `false` withholds
 /// them.
 ///
-/// [ADR-0024]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0024-the-relay-passes-mpvs-colour-description.md
+/// [ADR-0027]: https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md
 pub(super) const OFFER_SET_LUMINANCES: bool = true;
 
 /// The values of the protocol's enums the relay passes on, a bit for each: every render intent of

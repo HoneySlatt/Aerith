@@ -23,7 +23,8 @@ Aerith installs no content source of its own. What you play through it is your r
 
 - [`docs/ROADMAP.md`](docs/ROADMAP.md): what Aerith is, its quality bar, its decisions and its
   stages.
-- [`docs/PLAN.md`](docs/PLAN.md): the work in progress.
+- [`docs/PLAN.md`](docs/PLAN.md): the work in progress; [`docs/debt.md`](docs/debt.md), what is
+  left undone.
 - [`docs/adr/README.md`](docs/adr/README.md): the decisions and why.
 - [`docs/survey.md`](docs/survey.md): the facts of the field behind them, with sources.
 - [`docs/uwui-needs.md`](docs/uwui-needs.md): what Aerith asks of uwui, its interface's framework.

@@ -93,7 +93,8 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   compositor would refuse (`src/relay/check.rs`), and counted against ceilings on what the relay
   holds for mpv (`src/relay/mod.rs`): objects, shared-memory pools' files, and files that no
   request took (mpv sent them with requests that take none, which the server keeps queued). The
-  checks follow wlroots 0.20, Umbriel's base. Then it stays in
+  checks follow wlroots 0.20, Umbriel's base; Smithay's compositors (niri) are not checked yet
+  ([ADR-0026](adr/0026-stage-1-measured-on-niri-and-kwin-the-full-series-on-yuna.md)). Then it stays in
   the relay or is issued again on the window's connection. A refused request ends mpv's
   connection with a protocol error, never the window's; the relay tells the engine thread, which
   ends mpv and sends `EngineFailed`.
@@ -109,7 +110,7 @@ interface ── place, show, hide, close ──▶ Plane ──▶ relay's stat
   while it shows switches it to synchronized, so that the change appears with the interface's
   next commit; once the compositor drew it, the surface runs desynchronized again.
 - mpv describes its picture's colours through the relay
-  ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md); `src/relay/colour.rs`).
+  ([ADR-0027](adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md); `src/relay/colour.rs`).
   When the compositor has `wp_color_manager_v1` with parametric descriptions, mpv is offered it,
   at version 2 at most, with the render intents, transfer functions and primaries the compositor
   advertises, but never the `srgb` transfer function, so that Mesa never describes mpv's surface
@@ -209,6 +210,8 @@ rival, and watching the testbed's mpv over an IPC socket of the bench's.
 
 ## Rules that hold across parts
 
-- Decoders written in C, and JavaScript plugins, never run in the process that holds tokens.
+- Decoders written in C, and JavaScript plugins, never run in the process that holds tokens, where
+  the platform allows a separate process; elsewhere (Android, Apple), the ADR of that platform's
+  stage states the risk that remains. Stage 2 decides the desktop's processes in an ADR.
 - Every network access goes through the core's I/O layer and its rules.
 - The interface's thread never waits on a disk, the network or an engine.

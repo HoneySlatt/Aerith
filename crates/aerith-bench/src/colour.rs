@@ -3,7 +3,7 @@
 
 //! The colour descriptions mpv set on its surface, read from mpv's own Wayland log, the same way
 //! for mpv alone and for mpv inside Aerith's window
-//! ([ADR-0024](https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0024-the-relay-passes-mpvs-colour-description.md)).
+//! ([ADR-0027](https://github.com/HoneySlatt/Aerith/blob/main/docs/adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md)).
 //!
 //! With `WAYLAND_DEBUG=client`, libwayland prints each request mpv sends and each event it
 //! receives. mpv builds a description with a parametric creator (`set_tf_named`,

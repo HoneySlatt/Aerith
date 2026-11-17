@@ -1,7 +1,7 @@
 # 0015. mpv's picture through a relay on the interface's own Wayland connection
 
 - Status: Accepted; amended by 0018 (what mpv is offered, how its connection is bounded, what
-  wakes), 0020 (what mpv is offered, what of mpv's state reaches the plane) and 0024 (colour
+  wakes), 0020 (what mpv is offered, what of mpv's state reaches the plane) and 0027 (colour
   management)
 - Date: 2026-11-11
 
@@ -122,7 +122,7 @@ facing mpv is a Wayland server in pure Rust (wayland-server without its `system`
   closes it too.
 - A paused or stopped player wakes none of the relay's threads either.
 - mpv can still open the compositor's default socket by itself until it runs in a sandbox, already
-  debt due before Stage 2 ([PLAN](../PLAN.md#known-debt)).
+  debt due before Stage 2 ([debt](../debt.md)).
 - Where the video plane sits, above a black root with the interface above it or under a
   transparent root, is measured at M1.4b and decided then with a uwui session. The relay serves
   both.

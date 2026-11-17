@@ -36,7 +36,12 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   under other sessions' load; to measure again on a quiet machine before Stage 1's audit. M1.5
   designed on 2026-11-14 ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md),
   [ADR-0025](adr/0025-passthrough-off-by-default-display-vdrop-checked-on-a-file.md)) and split in
-  three by the owner. M1.5a under way.
+  three by the owner; M1.5a built and checked without a screen. On 2026-11-16 the owner's desktop
+  moved from Umbriel to niri; an architecture audit of 2026-11-17 and the owner's decisions that
+  day ([ADR-0026](adr/0026-stage-1-measured-on-niri-and-kwin-the-full-series-on-yuna.md),
+  [ADR-0027](adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md)) set the
+  order: M1.4d (robustness, and niri), M1.5a's sessions under KWin, the Windows exploration, M1.5b,
+  M1.5c, then M1.7 before the core calls the player. Next: M1.4d, on the owner's go.
 
 ## Status
 
@@ -48,10 +53,13 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.4a](#m14a--the-relay-and-the-test-interface) | mpv's picture plays inside Aerith's test window on Linux, through the relay | Done |
 | [M1.4b](#m14b--inside-the-window-measured) | The floors measured inside the window; the plane's order and display sync decided | Done |
 | [M1.4c](#m14c--display-sync-by-the-displays-rate) | The cadence floor holds inside the window, display sync chosen by the display's rate | Done |
-| [M1.5a](#m15a--hdr-and-dolby-vision-through-the-relay) | HDR and Dolby Vision reach the display as mpv alone shows them | In progress |
+| [M1.4d](#m14d--the-relays-robustness-and-niri) | A failure of the relay or of mpv is always reported, and the window holds under niri | Planned, next |
+| [M1.5a](#m15a--hdr-and-dolby-vision-through-the-relay) | HDR and Dolby Vision reach the display as mpv alone shows them | In progress: its sessions under KWin wait for M1.4d |
+| [M1.5w](#m15w--the-windows-exploration) | ADR-0003's hypothesis tried on Windows, by the owner | Planned |
 | [M1.5b](#m15b--passthrough) | The bitstream sent is the source's, and the cadence holds under it | Planned |
-| [M1.5c](#m15c--the-lowest-laptop) | The lowest laptop measured, display sync at 60 Hz included | Planned |
+| [M1.5c](#m15c--the-lowest-laptop) | The lowest laptop measured, display sync at 60 Hz and a stream through Aerith included | Planned |
 | [M1.6](#m16--windows) | The same on Windows | Planned |
+| [M1.7](#m17--the-player-ready-for-the-core) | The player gives the core what it will need, and holds over thousands of films | Planned |
 
 ## Stage 1 — The player on the desktop
 
@@ -222,6 +230,29 @@ Aerith's window under a test interface, measured against the rivals. Planned by
   - the closing review's findings fixed, first among them the probe's settle by time: mpv's
     presents under display sync outlast a switch to audio sync by up to a film frame.
 
+### M1.4d — The relay's robustness, and niri
+
+- **Goal.** A failure of the relay's thread or of mpv always reaches the player's events, never
+  hangs the interface, and the window holds under niri, the owner's compositor since 2026-11-16
+  ([ADR-0026](adr/0026-stage-1-measured-on-niri-and-kwin-the-full-series-on-yuna.md)).
+- **Delivers.** From the architecture audit of 2026-11-17:
+  - a guard on the relay's serving loop that, if its thread panics, ends mpv's connection and
+    calls `failed`, so that the player reports `EngineFailed`; a test that panics the thread;
+  - a test that settles whether mpv quits when its Wayland connection ends, and the documents
+    made to agree (ADR-0018 and `ARCHITECTURE.md` say it does, `mpv.rs` says it may not);
+  - the wayland-backend panic as an output goes away ("NULL user data on object wl_output"),
+    reproduced, its cause found and fixed;
+  - a bound on the start's round trip with the compositor, which has no timeout today;
+  - `tls-verify=yes` and a network timeout set on each load, so that no build of mpv sends a
+    stream's headers to a server it did not verify;
+  - niri's compatibility pass: the relay never closes the window under niri, mpv is told its
+    outputs (`fractional_scale_owed`), and the probe tells a fixed rate from VRR right.
+- **Done when.** The tests pass, each item with its failing test first; the testbed plays the
+  corpus's SDR clips under niri on the owner's display without an error on the window's
+  connection, mpv told its outputs, the probe right at a fixed rate and under VRR.
+- **How to test.** `cargo test`; the testbed under niri, briefly, on the owner's go.
+- **Measured.** Under niri, provisional: the probe's verdict and time, scanout, the window's errors.
+
 ### M1.5 — HDR, Dolby Vision and passthrough on Linux
 
 Designed on 2026-11-14 ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md),
@@ -237,27 +268,38 @@ on both tiers on Linux.
 - **Delivers.**
   - The relay offering mpv `wp_color_manager_v1`, listed, checked against the union of wlroots
     0.20's, Umbriel's, KWin 6.8's and Yuna's refusals, translated per version, fuzzed
-    ([ADR-0024](adr/0024-the-relay-passes-mpvs-colour-description.md)).
+    ([ADR-0027](adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md)).
   - The fake compositor with a colour manager and SDR and PQ preferred descriptions; the real mpv
     playing each HDR and Dolby Vision clip against it.
   - The player's report: Dolby Vision as mpv applies it, the container's claim apart.
   - The bench reading the description set on each plane, and the descriptions refused.
-- **Done when.** The tests pass; on the owner's display, the HDR clips' descriptions match mpv
-  alone's under Umbriel with HDR on and under KWin; the frames match mpv alone's; the owner has
-  compared them by eye; `set_luminances` is decided on its figures and ADR-0024 amended.
+- **Done when.** The tests pass; on the owner's display under KWin with HDR on, the HDR clips'
+  descriptions match mpv alone's and the frames match; the owner has compared them by eye;
+  `set_luminances` is decided on its figures, in an ADR that supersedes ADR-0027 ([ADR-0026](adr/0026-stage-1-measured-on-niri-and-kwin-the-full-series-on-yuna.md)).
 - **How to test.** `cargo test`; `scripts/bench-window.sh` on the owner's display.
-- **Measured.** On Umbriel at 240 Hz under display sync, with and without `set_luminances`:
-  scanout, GPU power, frames against mpv alone (about 15 min). Then the HDR and Dolby Vision clips
-  under Umbriel with HDR on (about 40 min with the owner's look), and under KWin with HDR on
-  (about 20 min). Each session on the owner's go.
-- **By hand.** The owner turns HDR on, and compares the clips by eye.
+- **Measured.** Under KWin at 240 Hz under display sync, VRR off, with and without
+  `set_luminances`: scanout, GPU power, frames against mpv alone (about 20 min). Then the HDR and
+  Dolby Vision clips under KWin with HDR on (`bench-window.sh … hdr`, about 25 min), and the
+  owner's look (about 15 min). Each session on the owner's go.
+- **By hand.** The owner starts a Plasma session, turns HDR on, and compares the clips by eye.
 - **Where it stands** (2026-11-14). Built and tested without a screen: the relay's colour
   management, checked by a fresh reader and corrected (luminances compared in `f32`, as Umbriel
   and wlroots compare them); the report's Dolby Vision; the bench's `colour` figures and
   `bench-window.sh`'s `hdr` part. Under KWin's virtual backend, Aerith's mpv sets mpv alone's
   description and draws the same frames
-  ([figures](measurements.md#m15a--hdr-and-dolby-vision-through-the-relay)). Left: the three
-  sessions on the owner's display, then `set_luminances` decided and ADR-0024 amended.
+  ([figures](measurements.md#m15a--hdr-and-dolby-vision-through-the-relay)). Left, after M1.4d:
+  the sessions under KWin, then `set_luminances` decided. The sessions planned under Umbriel were
+  dropped when the owner moved to niri (2026-11-16), which has no colour management.
+
+### M1.5w — The Windows exploration
+
+- **Goal.** Before M1.5b, a first look at whether ADR-0003's montage holds on Windows: mpv's child
+  window under a composed surface of the interface's, its picture, and a rough look at HDR and
+  cadence.
+- **Delivers.** A short procedure for the owner, and what the owner saw, in `measurements.md`.
+- **Done when.** The owner has run it on Windows and the findings are written; M1.6's design
+  starts from them.
+- **By hand.** The owner runs Windows; agents never start the virtual machines.
 
 ### M1.5b — Passthrough
 
@@ -275,16 +317,19 @@ on both tiers on Linux.
 ### M1.5c — The lowest laptop
 
 - **Goal.** The lowest laptop measured: the rule of display sync at 60 Hz, the 4K remux, the
-  first frame, the memory, against mpv alone and the rivals.
+  first frame, the memory, against mpv alone and the rivals; and whether a stream's bytes can pass
+  through Aerith on it.
 - **Delivers.** The bench reading swap, the lowest `MemAvailable`, and the APU's GTT and VRAM; one
   script for the owner, resumable, that checks the machine first (power sensor, 60 Hz, mains,
   corpus, quiet), alternates mpv alone and Aerith clip by clip, then runs M1.2's laptop set of the
-  rivals; its procedure in `CONTRIBUTING.md`.
+  rivals; its procedure in `CONTRIBUTING.md`. With it, the measure that decides the path of a
+  stream's bytes at Stage 2 ([ROADMAP](ROADMAP.md#open)): a 4K remux served to mpv by a local
+  relay, its throughput and CPU, the first frame and seeks, against mpv fetching it itself.
 - **Done when.** The owner has run it on the HP Laptop 17-ca2xxx (NixOS, niri) and brought the
   results back; the figures are in `docs/measurements.md`.
 - **How to test.** The script tried in `agent-headless`; then by the owner.
 - **Measured.** Cadence and display sync at 60 Hz on every cadence clip, the 4K HDR10 remux's
-  memory and power, the first frame, mpv's idle window. Runs of 2 to 5 minutes stand in for the
+  memory and power, the first frame, mpv's idle window, the stream through a local relay. Runs of 2 to 5 minutes stand in for the
   floors' 30 minutes, which stay debt.
 - **By hand.** The owner runs the laptop, about 2 hours, in one sitting or several.
 
@@ -297,6 +342,28 @@ on both tiers on Linux.
 - **How to test.** The bench on Windows, run by the owner or with the owner's go.
 - **Measured.** All of Stage 1's budgets on Windows.
 - **By hand.** The owner runs Windows; agents never start the virtual machines.
+
+### M1.7 — The player ready for the core
+
+- **Goal.** Before Stage 2's core calls the player, the player gives what it will need, and holds
+  over thousands of films.
+- **Delivers.** From the architecture audit of 2026-11-17: typed error kinds, mapped from mpv's
+  fixed list of `file_error` values; a start position given with `open` (open, then seek, is a
+  race today); a query of what the device decodes; a watchdog on mpv, a deadline on the oldest
+  unanswered command through the engine thread's `recv_timeout`, with no timer at rest; a bound on
+  the blocking write to mpv; a soak test of thousands of opens and stops, its descriptors and
+  threads constant.
+- **Done when.** Each with its test; the soak test runs in CI or, if too long, by hand with its
+  figures kept.
+- **How to test.** `cargo test`; the soak test.
+
+### Stage 1's audit
+
+Besides `audits.md`'s scope, from the architecture audit of 2026-11-17: the ADRs that amend one
+another (0015 with 0018, 0020 and 0027; 0013 with 0023; 0014 with 0016; 0021 with 0025; 0002 with
+0010) consolidated, one ADR stating each rule whole, as the method asks since 2026-11-16; the notes
+on how things were measured moved from this file to `measurements.md`; a table of stability
+scenarios in the ROADMAP's quality bar; a short `SECURITY.md`.
 
 ## Ideas
 
@@ -311,114 +378,8 @@ on both tiers on Linux.
 
 ## Known debt
 
-- The bench loads a clip as soon as the rival's engine answers: its first frame for mpv alone
-  includes part of mpv's start ([figures](measurements.md#against-m12-on-the-desktop)). The bench
-  is to wait until the engine has settled, and M1.2's first frames to be taken again; it changes
-  M1.2's method, on the owner's go.
-- The bench's sync figure is each engine's own estimate, without the sound card's latency; a
-  capture of the corpus's beat would measure the real one ([ADR-0013](adr/0013-the-bench.md)).
-- Kodi's frame figure is a lower bound (its log's output drops only), and its sync is read only
-  when its audio engine logs it.
-- For Stremio and Jellyfin Desktop, the time to the first frame is their engine's, not their
-  interface's: the bench loads the clip itself.
-- E-AC3 with Atmos has no source in the corpus ([ADR-0012](adr/0012-the-test-corpus.md)).
-- An mpv that freezes without exiting is not detected: its commands go unanswered
-  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-- mpv fetches streams itself, outside the I/O layer, and FFmpeg sends the headers it was given,
-  but `Authorization`, to the hosts a server redirects to: Stage 2 checks a stream's host, and its
-  redirects, against the I/O layer's rules before giving it a token.
-- mpv runs as the person, with the session's bus (through which the keyring answers) and the home
-  in reach: the separate process isolates crashes, not tokens. Due before Stage 2 stores a token:
-  run mpv in a sandbox, as its tests do, with no bus, no home but its cache, and the network only
-  for its stream ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-- `reap` polls every 10 ms, up to 2 s, when mpv ends or is closed; a crash or a close only.
-- A source that is a playlist is stopped, but mpv may start fetching its first entry, without the
-  source's headers, before the stop arrives
-  ([ADR-0014](adr/0014-the-player-interface-and-mpvs-connection.md)).
-- The player's report uses mpv's names for codecs, formats and colours. It tells Dolby Vision
-  only for the selected video track, and only when mpv reshapes the picture or the container
-  declares it: a file whose Dolby Vision metadata mpv cannot read (the corpus's
-  `dv7-1080p.ts`) shows as HDR10.
-- The relay's automated tests cover a fake compositor and lavapipe's shared memory only. Real
-  dma-bufs and a real compositor were exercised by hand, a few minutes, on Umbriel only. Its
-  checks follow wlroots 0.20: other compositors may refuse what wlroots accepts.
-- `tests/plane.rs`, the relay with the real mpv, runs only with `AERITH_TEST_WAYLAND=1`: it needs
-  lavapipe, and Mesa is 1.12 GB to add to every shell and CI job.
-- The relay's fuzz target runs a minute in CI, in a job of its own, by the owner's choice of
-  2026-11-12; not in `scripts/check.sh`.
-- A hostile mpv can make Aerith hold about 410 file descriptors at a peak, and wayland-rs panics
-  on two malformed messages that the relay refuses first: to raise upstream
-  ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
-- `aerith-testbed` is removed once Stage 3's interface on uwui plays a film
-  ([ADR-0017](adr/0017-a-test-interface-on-winit-and-wgpu.md)). It pins winit to `=0.30.13`, whose
-  viewport on the window's surface it relies on.
-- winit's `wayland-dlopen`, which the testbed asks for, makes every workspace build load
-  libwayland-client at run time, the player's included: the development shell sets
-  `LD_LIBRARY_PATH` for it, and for libxkbcommon and the Vulkan loader.
-- M1.4c's floors were measured mostly under other sessions' load (2 to 15 threads): quiet are
-  only the 23.976 fps runs at 240 Hz (and the 24 fps ones but their last seconds), and under VRR
-  Aerith's 24 to 50 fps runs and mpv alone's 25 to 50 fps ones. Due before Stage 1's
-  audit, by the owner's choice of 2026-11-14: both series again on a quiet machine
-  (`BENCH_SECONDS=60 scripts/bench-window.sh <corpus> "<display>" rule`, about 30 min each), and
-  the floor's 30 minutes, not taken.
-- The relay's probe is tested against the fake compositor only for a window that changes: no
-  bench run toggles fullscreen, so KWin's automatic VRR turning on mid-film was not run on the
-  desktop. Its thresholds rest on one display at 240 Hz; other rates, 60 Hz at M1.5 first, are
-  unmeasured. A VRR turned on with no change of the window or its display goes unseen until the
-  next change ([ADR-0021](adr/0021-display-sync-at-a-fixed-rate-audio-sync-under-vrr.md)).
-- The relay's tests with the real mpv run under a headless sway, whose presentations carry no
-  hardware times: the switch to display sync is run there only by hand, under KWin's virtual
-  backend ([CONTRIBUTING](../CONTRIBUTING.md#the-test-window)).
-- The bench reads mpv alone's presentation from mpv's own feedback: most frames without fifo, one
-  in two under it, so mpv alone's cadence is not measured on a compositor with fifo. The relay's
-  count, for Aerith, has every frame. Every M1.4b figure includes `WAYLAND_DEBUG=client`'s cost,
-  about 1 KB written a frame, not measured; each configuration was measured once.
-- The bench's frames compared are mpv's own drawing, again, at its window's size: they cannot show
-  what the compositor does to the plane (the relay's viewport, the opaque region).
-- Umbriel scans out the order above for most frames, not all (301 of 1,385 in one run); why is not
-  known.
-- A compositor that offers fractional scaling but never sends a subsurface's preferred scale would
-  leave mpv never told its outputs, and so the display's rate
-  ([`surface.rs`](../crates/aerith-player/src/relay/surface.rs), `fractional_scale_owed`). Umbriel,
-  KWin and the fake compositor all send it.
-- On a compositor without colour management (niri, on the lowest laptop), mpv dithers to 8 bits
-  alone and inside Aerith alike. Where the compositor offers it, the relay passes it on from
-  M1.5a, and their frames are the same ([figures](measurements.md#through-the-relay-without-a-screen)).
-- The window's thread wakes 52 to 135 times a second while a film plays under audio sync, 280 to
-  580 under display sync at 240 Hz, for events addressed to mpv on the socket it shares with the
-  relay. `wl-proxy` would spare it ([ADR-0015](adr/0015-a-relay-for-mpvs-wayland-surface.md)). By
-  the owner's choice of 2026-11-12, kept, and reopened at Stage 3 with the CPU time of uwui's
-  thread during a film.
-- mpv's window ready from the start costs 84 MiB while idle on the high tier; the lowest laptop is
-  measured at M1.5.
-- The relay's thread wakes about 6 times for each frame of a 24 fps film (142 a second) under audio
-  sync, and 853 to 1,083 times a second under display sync at 240 Hz (M1.4c), the rule at a fixed
-  rate; no breakdown and no budget yet.
-- ADR-0015's "mpv is told the new size once it settles" is built without a timer: one size in
-  flight, the latest after it. An animated resize thus makes mpv draw at several sizes in turn;
-  morphs at Stage 3 may want a settle delay.
-- The relay bounds each wake-up in requests, not in bytes sent on the window's connection. Before
-  libwayland 1.23, a full buffer is a fatal error of the whole connection; the relay assumes 1.23 or
-  later, the version the system's winit loads.
-- No picture when mpv's Vulkan context fails after it connected, or when the compositor's
-  linux-dmabuf is older than version 4: mpv's OpenGL fallback cannot open a second connection
-  ([ADR-0018](adr/0018-what-building-the-relay-changed.md)).
-- The 600 s run of the fuzz target explored inputs of 198 bytes at most, about a dozen messages;
-  CI's minute explores less. From `e3d0612` (M1.4b) to M1.5a, the target's prelude bound fifo as
-  `xdg_wm_base`, so every session ended in the prelude: the fuzzing of those milestones reached
-  almost none of the relay's handlers. M1.5a fixed it and made a refused prelude fail at once.
-- Once, under load, the existing test `an_output_the_compositor_removes_is_removed_for_mpv`
-  panicked inside wayland-backend (`client_impl/mod.rs:795`, "NULL user data on object
-  wl_output"), as an output went away; 300 runs alone and 100 loaded runs did not repeat it. If
-  the race lies in the relay's handling of a removed output, a monitor unplugged during a film
-  could panic the relay's thread. To reproduce and fix before Stage 1's audit.
-- `scripts/test-check.sh` copies `.git` with tar: in a git worktree, where `.git` is a file, its
-  cases stage scratch files in the worktree's own index.
-- `scripts/check.sh` grew from 33 s to over three minutes: `scripts/test-check.sh` runs the whole
-  test suite, `at_rest`'s 9 s included, in six of its copies. A lighter way for those copies is the
-  owner's call ([figures](measurements.md#the-checks)).
-
-- This file holds about 3,800 words, over the 2,000 it aims at: the debt above is most of it.
+The known debt is in [`debt.md`](debt.md): it outgrew a page of this file. M1.4d pays the items of
+the relay's robustness; Stage 1's audit triages the rest.
 
 Finished stages move to `docs/history.md`, in a few lines each, so that this file holds the current
 stage only, under about 2,000 words.

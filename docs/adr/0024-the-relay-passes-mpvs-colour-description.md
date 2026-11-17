@@ -1,6 +1,6 @@
 # 0024. The relay passes mpv's colour description to the plane; the interface declares none
 
-- Status: Accepted; amends 0015 (what mpv is offered)
+- Status: Superseded by 0027
 - Date: 2026-11-14
 
 ## Context
