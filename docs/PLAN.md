@@ -42,6 +42,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [ADR-0027](adr/0027-the-relay-passes-mpvs-colour-description-checked-under-kwin.md)) set the
   order: M1.4d (robustness, and niri), M1.5a's sessions under KWin, the Windows exploration, M1.5b,
   M1.5c, then M1.7 before the core calls the player. Next: M1.4d, on the owner's go.
+- **Rust toolchain**: keep 1.99.1 through Stage 1. Review the stable version at the stage's close
+  and validate the upgrade on Linux and Windows in its own commit
+  ([ADR-0011](adr/0011-a-pinned-stable-toolchain.md)).
 
 ## Status
 
